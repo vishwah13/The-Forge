@@ -34,19 +34,47 @@
 #define DEFAULT_SPEC             "Default_SPEC"
 #define DEFAULT_SPEC_TRANSPARENT "Default_SPEC_TRANS"
 
+// Returns "SanMiguel_3/<name>.tex", or the path of `fallback` if `name` is not present in the art assets.
+// A texture that fails to load would otherwise leave a NULL texture bound to the material descriptor set.
+static char* findTexturePath(const char* name, const char* fallback)
+{
+    const char* candidates[] = { name, fallback };
+    char*       path = NULL;
+    for (uint32_t i = 0; i < TF_ARRAY_COUNT(candidates); ++i)
+    {
+        int32_t extraStrLength = 17; //-- len('SanMiguel_3/') + len('.tex') + len('/0') = 17
+        size_t  pathSize = strlen(candidates[i]) + extraStrLength;
+        path = (char*)tf_calloc(pathSize, sizeof(char));
+        snprintf(path, pathSize, "SanMiguel_3/%s.tex", candidates[i]);
+
+        FileStream fs = {};
+        if (fsOpenStreamFromPath(RD_TEXTURES, path, FM_READ, &fs))
+        {
+            fsCloseStream(&fs);
+            if (i > 0)
+            {
+                LOGF(eWARNING, "Texture SanMiguel_3/%s.tex not found, using %s instead", name, path);
+            }
+            return path;
+        }
+        if (i + 1 < TF_ARRAY_COUNT(candidates))
+        {
+            tf_free(path);
+        }
+    }
+
+    LOGF(eERROR, "Texture SanMiguel_3/%s.tex and its fallback %s are both missing, art assets are incomplete", name, path);
+    ASSERT(false);
+    return path;
+}
+
 static void setTextures(Scene* pScene, int index, const char* albedo, const char* specular, const char* normal, uint32_t matFlags)
 {
     pScene->materialFlags[index] = matFlags;
 
-    // default textures
-    int32_t extraStrLength = 17; //-- len('SanMiguel_3/') + len('.tex') + len('/0') = 17
-    pScene->textures[index] = (char*)tf_calloc(strlen(albedo) + extraStrLength, sizeof(char));
-    pScene->specularMaps[index] = (char*)tf_calloc(strlen(specular) + extraStrLength, sizeof(char));
-    pScene->normalMaps[index] = (char*)tf_calloc(strlen(normal) + extraStrLength, sizeof(char));
-
-    snprintf(pScene->textures[index], strlen(albedo) + extraStrLength, "SanMiguel_3/%s.tex", albedo);
-    snprintf(pScene->specularMaps[index], strlen(specular) + extraStrLength, "SanMiguel_3/%s.tex", specular);
-    snprintf(pScene->normalMaps[index], strlen(normal) + extraStrLength, "SanMiguel_3/%s.tex", normal);
+    pScene->textures[index] = findTexturePath(albedo, DEFAULT_ALBEDO);
+    pScene->specularMaps[index] = findTexturePath(specular, DEFAULT_SPEC);
+    pScene->normalMaps[index] = findTexturePath(normal, DEFAULT_NORMAL);
 }
 
 static void setDefaultTextures(Scene* pScene, int index)

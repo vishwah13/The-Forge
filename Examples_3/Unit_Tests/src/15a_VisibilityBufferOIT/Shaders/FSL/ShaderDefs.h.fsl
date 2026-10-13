@@ -59,7 +59,9 @@ STRUCT(MeshData)
 #include "../../../../../../Common_3/Renderer/VisibilityBuffer/Shaders/FSL/VisibilityBufferShaderDefs.h.fsl"
 
 // Max triangle filtering groups the GPU pipeline workgraph can launch (NodeMaxDispatchGrid of Filter_Node).
-// D3D12 caps a dispatch grid dimension at 65535; launching more groups than declared is undefined behavior.
+// This is the D3D12 API limit, not a per-GPU value: the Work Graphs spec caps each NodeMaxDispatchGrid dimension at
+// D3D12_CS_DISPATCH_MAX_THREAD_GROUPS_PER_DIMENSION (65535, d3d12.h) on every device with WorkGraphsTier >= 1.0.
+// Launching more groups than declared is undefined behavior (San Miguel needs ~10.5k groups).
 #define GPU_PIPELINE_MAX_DISPATCH_GROUPS 65535
 
 #define MATERIAL_ID_LOW_BIT 0   // 16 bits for materialID

@@ -1,0 +1,144 @@
+# 40_AutoBattler — Design
+
+Date: 2026-10-13
+
+## Intent
+
+A small, playable top-down auto battler built on The Forge, using only assets already in `Art/`.
+Two armies of team-tinted Stormtroopers (up to ~2,000 units total) fight automatically after the
+player places squads. The simulation runs on the framework's Flecs ECS so it scales to many entities.
+
+What the user asked for: top-down auto battler, existing art only, simple, built on The Forge,
+use the framework's Flecs. Choices made with the user: place-then-watch gameplay, team-tinted
+Stormtroopers, three unit types (Melee, Ranged, Tank), ~2,000 units with squad placement.
+
+Out of scope: shop/bench/merging, sound, locomotion animations (the Stormtrooper only has
+`dance.ozz`), pathfinding/obstacles, non-Windows project files.
+
+## Where it lives
+
+New unit test sample, modelled on `28_Skinning` (skinned Stormtrooper) and `19_CodeHotReload`
+(Flecs usage):
+
+- `Examples_3/Unit_Tests/src/40_AutoBattler/40_AutoBattler.cpp` — `IApp`: renderer resources,
+  pipelines, camera, input, UI, drawing.
+- `Examples_3/Unit_Tests/src/40_AutoBattler/AutoBattlerSim.h/.cpp` — Flecs world, components,
+  systems, spatial grid, game rules. No graphics includes, so it can run headless.
+- `Examples_3/Unit_Tests/src/40_AutoBattler/Shaders/FSL/` — unit (skinned, instanced), ground,
+  health bar and projectile shaders, `shaders.list`, SRT header.
+- `Examples_3/Unit_Tests/src/40_AutoBattler/GPUCfg/gpu.cfg` — copied from 28_Skinning.
+- `Examples_3/Unit_Tests/PC_VS2019/40_AutoBattler.vcxproj` (+ `.filters`, `.user`), compiling
+  `Common_3/Game/ThirdParty/OpenSource/flecs/flecs.c` like 19_CodeHotReload, added to `Unit_Tests.sln`.
+
+## Assets
+
+| Use | Asset |
+|---|---|
+| Units | `Meshes/stormtrooper/riggedMesh.bin`, `Animation/stormtrooper/skeleton.ozz`, `Textures/dds/Stormtrooper_D.tex` |
+| Victory dance | `Animation/stormtrooper/animations/dance.ozz` |
+| Projectiles | `Meshes/cube.bin` |
+| Ground | `Textures/dds/PBR/copper_tiles_01/1K/Albedo.tex` |
+| Text | existing UI fonts |
+
+## Game rules
+
+**Arena:** 16×16 grid of 5 m cells (80 m square) on the XZ plane. Player owns rows 0–7, enemy rows 8–15.
+
+**Squads and units:**
+
+| Type | Squad | Cost | HP | Damage / cooldown | Range | Speed | Scale |
+|---|---|---|---|---|---|---|---|
+| Melee | 25 (5×5) | 2 | 100 | 15 / 0.8 s | 1.2 m | 3.0 m/s | 1.0 |
+| Ranged | 16 (4×4) | 3 | 60 | 12 / 1.0 s, projectile 15 m/s | 8 m | 2.5 m/s | 0.9 |
+| Tank | 9 (3×3) | 4 | 250 | 8 / 1.2 s | 1.4 m | 1.8 m/s | 1.3 |
+
+Unit collision radius = 0.4 m × scale. A squad fills one cell in its formation; a cell holds one squad.
+
+**Phases** (a `GameState` singleton holds phase, round, gold, battle timer, result):
+
+1. **Prep** — player starts with 10 gold. Select a unit type in the UI, left-click an empty cell on
+   the player half to buy a squad, right-click a player squad cell to sell it (full refund). The
+   enemy wave for this round is already visible. Start Battle is disabled with zero player squads.
+2. **Battle** — systems run. Each unit targets the nearest living enemy, moves until in range,
+   attacks on cooldown. Melee/Tank hit instantly; Ranged spawn a projectile that homes on its
+   target and deals damage on contact (or vanishes if the target died). Units separate from nearby
+   units so crowds spread instead of stacking. Units stay inside the arena.
+3. **Result** — when one team has no units, survivors dance for 4 s. If 90 s pass first, it's a loss.
+   - Victory: round += 1, gold += 5 + round, surviving player squads are restored at full strength
+     to their original cells (the army persists between rounds), new enemy wave generated.
+   - Defeat: show "Defeat — reached round N" with a Restart button (round 1, 10 gold, empty army).
+
+**Enemy waves:** budget = 6 + 4 × round gold, spent on random squad types in random free enemy cells,
+using a seeded RNG (seed = round) so waves are repeatable.
+
+**Cap:** 4,096 live units + 1,024 live projectiles. Buying a squad that would exceed the unit cap
+is refused with a UI message; wave generation stops spending at the cap.
+
+## ECS design (Flecs C API)
+
+Setup follows 19_CodeHotReload: `initEntityComponentSystem()`, `ecs_init()`,
+`ecs_set_threads(world, max(cores - 1, 1))`, `ECS_COMPONENT_DEFINE`, `ECS_SYSTEM`.
+
+**Components**
+
+- `Position { float2 p; }`, `Velocity { float2 v; }`, `Facing { float yaw; }`
+- `Unit { uint8 team; uint8 type; uint16 squadCell; float radius; }`
+- `Health { float hp, maxHp, hitFlash; }`
+- `Attack { float damage, range, cooldown, timer; ecs_entity_t target; }`
+- `Projectile { ecs_entity_t target; float damage; uint8 team; }` (plus `Position`)
+- Singletons: `GameState`, `SpatialGrid` (owns flat arrays, not per-entity data)
+
+**Spatial grid:** 2 m buckets over the arena. Rebuilt each frame into flat arrays (counting sort
+by bucket) holding entity id, position, team, radius. Queries read only this snapshot, so systems
+can run in parallel without reading other entities' live components.
+
+**Systems** (run only in Battle; disabled with `ecs_enable` in other phases):
+
+| Phase | System | Threads | Work |
+|---|---|---|---|
+| PreUpdate | `BuildGridSystem` | 1 | Rebuild grid snapshot, count living units per team |
+| OnUpdate | `SteerSystem` | multi | Retarget (every 0.25 s, or when target died) by searching grid rings outward for nearest enemy; set velocity toward target unless in range; add separation from grid neighbours; clamp to arena; integrate position; update facing |
+| OnUpdate | `AttackSystem` | 1 | Tick cooldowns; in range → apply damage to target `Health` (melee) or spawn projectile (ranged). Single-threaded because it writes other entities |
+| OnUpdate | `ProjectileSystem` | 1 | Move toward target; on contact apply damage and delete; delete if target gone |
+| PostUpdate | `DeathSystem` | 1 | `hp <= 0` → `ecs_delete` (deferred, safe) |
+| PostUpdate | `RoundEndSystem` | 1 | Uses team counts from the grid to switch to Result |
+
+Prep and Result phases still run a render-fill pass so units are drawn when idle.
+
+**Render data:** `FillRenderData(sim, out)` iterates queries and writes plain CPU arrays (unit
+instances, health bars for damaged units only, projectile instances). The app copies them to
+per-frame GPU buffers. The sim never touches GPU objects.
+
+## Rendering
+
+- **Units:** one `cmdDrawIndexedInstanced` of the Stormtrooper mesh. Per-instance structured buffer
+  `{ float4x4 world; float4 tint; }` indexed by instance id; tint = team colour (blue / red) mixed
+  with white by `hitFlash`. One shared joint-matrix buffer for all instances: bind pose during
+  Prep/Battle, the live dance pose (one `AnimatedObject` update per frame) during Result. Only
+  winners are alive in Result, so all of them dance in sync.
+- **Ground:** quad with tiled copper albedo, darker tint on the enemy half, grid lines, highlighted
+  hover cell in Prep (green = can place, red = cannot).
+- **Health bars:** instanced camera-facing quads above damaged units (green over red).
+- **Projectiles:** instanced small cubes, unlit yellow.
+- **Camera:** looks down at ~60° over the arena centre. WASD/arrow pan, mouse wheel zoom, clamped
+  to the arena.
+- **UI:** one window: phase, round, gold, unit counts per team, unit type radio buttons with cost,
+  Start Battle / Restart, battle timer, message line. Victory/Defeat banner text.
+- **Mouse picking:** ray from cursor through inverse view-projection intersected with ground plane y=0.
+
+## Error handling
+
+- Asset or resource load failure follows existing sample behaviour (framework asserts/logs, `Init` returns false).
+- Unit/projectile caps enforced at spawn time; `ASSERT` on instance buffer overflow as a guard.
+- Targets are validated with `ecs_is_alive` before use; dead targets trigger retarget.
+- Frame `deltaTime` clamped to 1/30 s so a hitch can't tunnel units or skip combat.
+
+## Verification
+
+- Debug build: startup self-check runs a headless battle in a separate Flecs world (2 player Melee
+  squads vs 1 enemy Melee squad, fixed dt 1/60 for up to 60 s) and asserts the player wins and the
+  enemy count reaches zero. The sim has no graphics dependency, so this needs no renderer.
+- Build Debug and Release for PC_VS2019.
+- Run manually: place squads, win a round (army persists, gold increases), lose a round (Defeat →
+  Restart), fill toward ~2,000 units and confirm it stays interactive, check the log for
+  validation errors.

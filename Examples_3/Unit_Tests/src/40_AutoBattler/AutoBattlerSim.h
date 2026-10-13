@@ -65,6 +65,12 @@ void       simDestroy(BattleSim* pSim);
 // Round 1, START_GOLD, empty player board, fresh enemy wave, PHASE_PREP.
 void simRestart(BattleSim* pSim);
 
+// PREP with at least one player squad -> BATTLE. Otherwise refused (see simGetMessage()).
+bool simStartBattle(BattleSim* pSim);
+
+// Advances the battle or result timer. Ignores NaN/non-positive steps and clamps to MAX_STEP.
+void simStep(BattleSim* pSim, float deltaTime);
+
 // Board editing, PREP only. On refusal the state is unchanged and simGetMessage() says why.
 bool     simCanBuySquad(const BattleSim* pSim, int32_t cellX, int32_t cellZ, UnitType type);
 bool     simBuySquad(BattleSim* pSim, int32_t cellX, int32_t cellZ, UnitType type);
@@ -75,6 +81,8 @@ Phase       simGetPhase(const BattleSim* pSim);
 int32_t     simGetRound(const BattleSim* pSim);
 int32_t     simGetGold(const BattleSim* pSim);
 uint32_t    simGetUnitCount(BattleSim* pSim, Team team);
+float       simGetBattleTime(const BattleSim* pSim);
+uint32_t    simGetProjectileCount(const BattleSim* pSim);
 const char* simGetMessage(const BattleSim* pSim);
 
 // Pure helpers, also used by the app's mouse picking.
@@ -86,6 +94,11 @@ bool   rayToCell(const float3& origin, const float3& dir, int32_t* pCellX, int32
 bool simTestSetCell(BattleSim* pSim, int32_t cellX, int32_t cellZ, UnitType type);
 void simTestClearBoard(BattleSim* pSim);
 void simTestSetGold(BattleSim* pSim, int32_t gold);
+void  simTestSpawnUnit(BattleSim* pSim, Team team, UnitType type, float x, float z);
+void  simTestSetBattleTime(BattleSim* pSim, float seconds);
+float simTestTotalHp(BattleSim* pSim, Team team);
+bool  simTestAllPositionsFinite(BattleSim* pSim);
+float simTestMinUnitDistance(BattleSim* pSim, Team team);
 
 // Runs the headless simulation tests, writes a report next to the log, returns the failure count.
 int runAutoBattlerSelfTest(const char* pResultFileName);

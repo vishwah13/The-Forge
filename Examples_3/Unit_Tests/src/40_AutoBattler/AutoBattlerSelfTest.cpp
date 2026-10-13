@@ -146,6 +146,205 @@ static void testWaveDeterministic(TestContext* pCtx)
     simDestroy(s);
 }
 
+static void runBattle(BattleSim* s, float seconds)
+{
+    const int32_t steps = (int32_t)(seconds * 60.0f);
+    for (int32_t i = 0; i < steps && simGetPhase(s) == PHASE_BATTLE; ++i)
+        simStep(s, 1.0f / 60.0f);
+}
+
+static void stepFor(BattleSim* s, float seconds)
+{
+    const int32_t steps = (int32_t)(seconds * 60.0f);
+    for (int32_t i = 0; i < steps; ++i)
+        simStep(s, 1.0f / 60.0f);
+}
+
+static void setupMeleeSkirmish(BattleSim* s)
+{
+    simTestClearBoard(s);
+    simTestSetCell(s, 7, 6, UNIT_MELEE);
+    simTestSetCell(s, 8, 6, UNIT_MELEE);
+    simTestSetCell(s, 7, 9, UNIT_MELEE);
+}
+
+static void testStartBattleGuards(TestContext* pCtx)
+{
+    BattleSim* s = simCreate(1);
+    CHECK(!simStartBattle(s));
+    CHECK(simGetPhase(s) == PHASE_PREP);
+    CHECK(strcmp(simGetMessage(s), "Place at least one squad first") == 0);
+    CHECK(simBuySquad(s, 0, 0, UNIT_MELEE));
+    CHECK(simStartBattle(s));
+    CHECK(simGetPhase(s) == PHASE_BATTLE);
+    CHECK(!simStartBattle(s));
+    CHECK(!simBuySquad(s, 1, 0, UNIT_MELEE));
+    CHECK(strcmp(simGetMessage(s), "Squads can only be placed during prep") == 0);
+    CHECK(!simSellSquad(s, 0, 0));
+    simDestroy(s);
+}
+
+static void testMeleeBattleAndNextRound(TestContext* pCtx)
+{
+    BattleSim* s = simCreate(1);
+    setupMeleeSkirmish(s);
+    CHECK(simStartBattle(s));
+    runBattle(s, 60.0f);
+    CHECK(simGetPhase(s) == PHASE_VICTORY);
+    CHECK(simGetUnitCount(s, TEAM_ENEMY) == 0u);
+    CHECK(simGetUnitCount(s, TEAM_PLAYER) > 0u);
+    CHECK(simGetBattleTime(s) < 60.0f);
+
+    stepFor(s, RESULT_DURATION + 0.5f);
+    CHECK(simGetPhase(s) == PHASE_PREP);
+    CHECK(simGetRound(s) == 2);
+    CHECK(simGetGold(s) == START_GOLD + 5 + 2);
+    CHECK(simGetUnitCount(s, TEAM_PLAYER) == 50u); // army restored at full strength
+    CHECK(simGetCell(s, 7, 6) == UNIT_MELEE && simGetCell(s, 8, 6) == UNIT_MELEE);
+    CHECK(simGetUnitCount(s, TEAM_ENEMY) > 0u); // new wave
+    simDestroy(s);
+}
+
+static void testRangedProjectiles(TestContext* pCtx)
+{
+    BattleSim* s = simCreate(1);
+    simTestClearBoard(s);
+    simTestSetCell(s, 8, 7, UNIT_RANGED);
+    simTestSetCell(s, 8, 8, UNIT_TANK);
+    const float enemyHpBefore = simTestTotalHp(s, TEAM_ENEMY);
+    CHECK(enemyHpBefore == 9.0f * 250.0f);
+    CHECK(simStartBattle(s));
+    uint32_t maxProjectiles = 0;
+    for (int32_t i = 0; i < 120 && simGetPhase(s) == PHASE_BATTLE; ++i)
+    {
+        simStep(s, 1.0f / 60.0f);
+        if (simGetProjectileCount(s) > maxProjectiles)
+            maxProjectiles = simGetProjectileCount(s);
+    }
+    CHECK(maxProjectiles > 0u);
+    CHECK(maxProjectiles <= MAX_PROJECTILES);
+    CHECK(simTestTotalHp(s, TEAM_ENEMY) < enemyHpBefore);
+    simDestroy(s);
+}
+
+static void testDefeatAndRestart(TestContext* pCtx)
+{
+    BattleSim* s = simCreate(1);
+    simTestClearBoard(s);
+    simTestSetCell(s, 7, 6, UNIT_MELEE);
+    for (int32_t x = 3; x < 13; ++x)
+        simTestSetCell(s, x, 9, UNIT_TANK);
+    CHECK(simStartBattle(s));
+    runBattle(s, 60.0f);
+    CHECK(simGetPhase(s) == PHASE_DEFEAT);
+    stepFor(s, 10.0f);
+    CHECK(simGetPhase(s) == PHASE_DEFEAT); // stays until restart
+    CHECK(simGetRound(s) == 1);
+    simRestart(s);
+    CHECK(simGetPhase(s) == PHASE_PREP && simGetRound(s) == 1 && simGetGold(s) == START_GOLD);
+    CHECK(simGetUnitCount(s, TEAM_PLAYER) == 0u);
+    simDestroy(s);
+}
+
+static void testTimeout(TestContext* pCtx)
+{
+    BattleSim* s = simCreate(1);
+    simTestClearBoard(s);
+    simTestSetCell(s, 0, 0, UNIT_MELEE);
+    simTestSetCell(s, 15, 15, UNIT_TANK);
+    CHECK(simStartBattle(s));
+    simTestSetBattleTime(s, BATTLE_TIME_LIMIT - 0.001f);
+    simStep(s, 1.0f / 60.0f);
+    CHECK(simGetPhase(s) == PHASE_DEFEAT);
+    CHECK(strcmp(simGetMessage(s), "Time ran out") == 0);
+    simDestroy(s);
+}
+
+static void testCoincidentUnitsSeparate(TestContext* pCtx)
+{
+    BattleSim* s = simCreate(1);
+    simTestClearBoard(s);
+    simTestSetCell(s, 0, 0, UNIT_MELEE);
+    simTestSetCell(s, 15, 15, UNIT_MELEE);
+    simTestSpawnUnit(s, TEAM_PLAYER, UNIT_MELEE, 40.0f, 20.0f);
+    simTestSpawnUnit(s, TEAM_PLAYER, UNIT_MELEE, 40.0f, 20.0f);
+    CHECK(simTestMinUnitDistance(s, TEAM_PLAYER) < 1e-6f);
+    CHECK(simStartBattle(s));
+    stepFor(s, 1.0f);
+    CHECK(simTestAllPositionsFinite(s));
+    CHECK(simTestMinUnitDistance(s, TEAM_PLAYER) > 0.2f);
+    simDestroy(s);
+}
+
+static void testDeltaTimeClamp(TestContext* pCtx)
+{
+    BattleSim* s = simCreate(1);
+    setupMeleeSkirmish(s);
+    CHECK(simStartBattle(s));
+    simStep(s, 10.0f);
+    CHECK(simGetBattleTime(s) <= MAX_STEP + 1e-6f);
+    const float t = simGetBattleTime(s);
+    simStep(s, NAN);
+    simStep(s, -1.0f);
+    simStep(s, 0.0f);
+    CHECK(simGetBattleTime(s) == t);
+    CHECK(simTestAllPositionsFinite(s));
+    simDestroy(s);
+}
+
+static void testRestartMidBattle(TestContext* pCtx)
+{
+    BattleSim* s = simCreate(1);
+    simTestClearBoard(s);
+    simTestSetCell(s, 8, 7, UNIT_RANGED);
+    simTestSetCell(s, 8, 8, UNIT_TANK);
+    CHECK(simStartBattle(s));
+    stepFor(s, 0.1f);
+    CHECK(simGetProjectileCount(s) > 0u);
+    simRestart(s);
+    CHECK(simGetPhase(s) == PHASE_PREP);
+    CHECK(simGetProjectileCount(s) == 0u);
+    CHECK(simGetUnitCount(s, TEAM_PLAYER) == 0u);
+    simDestroy(s);
+}
+
+struct BattleOutcome
+{
+    Phase    mPhase;
+    float    mTime;
+    uint32_t mPlayers;
+    uint32_t mEnemies;
+    float    mPlayerHp;
+};
+
+static BattleOutcome runScriptedBattle(uint32_t threads)
+{
+    BattleSim* s = simCreate(threads);
+    simTestClearBoard(s);
+    simTestSetCell(s, 7, 6, UNIT_MELEE);
+    simTestSetCell(s, 8, 6, UNIT_MELEE);
+    simTestSetCell(s, 8, 5, UNIT_RANGED);
+    simTestSetCell(s, 7, 9, UNIT_MELEE);
+    simTestSetCell(s, 8, 9, UNIT_TANK);
+    simStartBattle(s);
+    runBattle(s, 60.0f);
+    const BattleOutcome outcome = { simGetPhase(s), simGetBattleTime(s), simGetUnitCount(s, TEAM_PLAYER), simGetUnitCount(s, TEAM_ENEMY),
+                                    simTestTotalHp(s, TEAM_PLAYER) };
+    simDestroy(s);
+    return outcome;
+}
+
+static void testThreadCountDoesNotChangeOutcome(TestContext* pCtx)
+{
+    const BattleOutcome single = runScriptedBattle(1);
+    const BattleOutcome multi = runScriptedBattle(4);
+    CHECK(single.mPhase != PHASE_BATTLE);
+    CHECK(single.mPhase == multi.mPhase);
+    CHECK(single.mTime == multi.mTime);
+    CHECK(single.mPlayers == multi.mPlayers && single.mEnemies == multi.mEnemies);
+    CHECK(single.mPlayerHp == multi.mPlayerHp);
+}
+
 typedef void (*TestFn)(TestContext*);
 
 struct NamedTest
@@ -165,6 +364,15 @@ int runAutoBattlerSelfTest(const char* pResultFileName)
         { "buy and sell", testBuySell },
         { "unit cap", testUnitCap },
         { "wave is deterministic", testWaveDeterministic },
+        { "start battle guards", testStartBattleGuards },
+        { "melee battle and next round", testMeleeBattleAndNextRound },
+        { "ranged projectiles", testRangedProjectiles },
+        { "defeat and restart", testDefeatAndRestart },
+        { "timeout", testTimeout },
+        { "coincident units separate", testCoincidentUnitsSeparate },
+        { "delta time clamp", testDeltaTimeClamp },
+        { "restart mid battle", testRestartMidBattle },
+        { "thread count does not change outcome", testThreadCountDoesNotChangeOutcome },
     };
     for (uint32_t i = 0; i < sizeof(tests) / sizeof(tests[0]); ++i)
     {

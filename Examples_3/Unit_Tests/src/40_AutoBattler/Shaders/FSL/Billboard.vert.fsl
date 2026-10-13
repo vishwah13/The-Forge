@@ -1,0 +1,30 @@
+#include "AutoBattler.h.fsl"
+
+STRUCT(VSOutput)
+{
+    DATA(float4, Position, SV_Position);
+    DATA(float2, UV, TEXCOORD0);
+    DATA(float4, FullColorFill, COLOR0);
+    DATA(float3, EmptyColor, COLOR1);
+};
+
+ROOT_SIGNATURE(DefaultRootSignature)
+VSOutput VS_MAIN(SV_VertexID(uint) vertexId)
+{
+    INIT_MAIN;
+    VSOutput Out;
+    uint   index = vertexId / 6;
+    uint   v = vertexId % 6;
+    float2 corner = float2((v == 1 || v == 2 || v == 4) ? 1.0f : 0.0f, (v == 2 || v == 4 || v == 5) ? 1.0f : 0.0f);
+
+    float4 centerHalfWidth = gBillboards[index].centerHalfWidth;
+    float4 emptyColorHalfHeight = gBillboards[index].emptyColorHalfHeight;
+    float2 offset = (corner * 2.0f - 1.0f) * float2(centerHalfWidth.w, emptyColorHalfHeight.w);
+    float3 worldPos = centerHalfWidth.xyz + gFrame.camRight.xyz * offset.x + gFrame.camUp.xyz * offset.y;
+
+    Out.Position = mul(gFrame.viewProj, float4(worldPos, 1.0f));
+    Out.UV = corner;
+    Out.FullColorFill = gBillboards[index].fullColorFill;
+    Out.EmptyColor = emptyColorHalfHeight.rgb;
+    RETURN(Out);
+}

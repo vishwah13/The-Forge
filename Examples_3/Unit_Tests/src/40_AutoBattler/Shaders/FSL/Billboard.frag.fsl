@@ -1,0 +1,19 @@
+#include "AutoBattler.h.fsl"
+
+STRUCT(VSOutput)
+{
+    DATA(float4, Position, SV_Position);
+    DATA(float2, UV, TEXCOORD0);
+    DATA(float4, FullColorFill, COLOR0);
+    DATA(float3, EmptyColor, COLOR1);
+};
+
+ROOT_SIGNATURE(DefaultRootSignature)
+float4 PS_MAIN(VSOutput In)
+{
+    INIT_MAIN;
+    float4 Out;
+    float3 color = In.UV.x <= In.FullColorFill.a ? In.FullColorFill.rgb : In.EmptyColor;
+    Out = float4(color, 1.0f);
+    RETURN(Out);
+}

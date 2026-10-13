@@ -1,0 +1,24 @@
+#include "AutoBattler.h.fsl"
+
+STRUCT(VSOutput)
+{
+    DATA(float4, Position, SV_Position);
+    DATA(float3, Normal, NORMAL);
+    DATA(float2, UV, TEXCOORD0);
+    DATA(float4, Color, COLOR0);
+};
+
+ROOT_SIGNATURE(DefaultRootSignature)
+float4 PS_MAIN(VSOutput In)
+{
+    INIT_MAIN;
+    float4 Out;
+    float  nDotL = saturate((dot(normalize(In.Normal), normalize(float3(0.3f, 1.0f, -0.4f))) + 1.0f) * 0.5f);
+    float3 albedo = SampleTex2D(gUnitTexture, gSamplerTrilinearWrap, In.UV).rgb;
+    float  luminance = dot(albedo, float3(0.333f, 0.333f, 0.333f));
+    // Tint the white armour with the team colour, then flash towards white when hit.
+    float3 color = lerp(albedo, In.Color.rgb * luminance * 1.6f, 0.65f);
+    color = lerp(color, float3(1.0f, 1.0f, 1.0f), In.Color.a * 0.8f);
+    Out = float4(color * (0.35f + 0.65f * nDotL), 1.0f);
+    RETURN(Out);
+}

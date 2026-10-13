@@ -1,0 +1,33 @@
+#include "AutoBattler.h.fsl"
+
+STRUCT(VSOutput)
+{
+    DATA(float4, Position, SV_Position);
+    DATA(float2, WorldXZ, TEXCOORD0);
+};
+
+ROOT_SIGNATURE(DefaultRootSignature)
+float4 PS_MAIN(VSOutput In)
+{
+    INIT_MAIN;
+    float4 Out;
+    float  cellSize = gFrame.hoverCell.w;
+    float2 cellUV = In.WorldXZ / cellSize;
+    float3 albedo = SampleTex2D(gGroundTexture, gSamplerTrilinearWrap, cellUV * 0.5f).rgb;
+
+    // Mostly grey stone so the halves read clearly: cool on the player half, darker and warm on the enemy half.
+    albedo = lerp(albedo, f3(dot(albedo, float3(0.333f, 0.333f, 0.333f))), 0.8f);
+    albedo *= In.WorldXZ.y >= gFrame.arena.y ? float3(0.75f, 0.45f, 0.42f) : float3(0.75f, 0.9f, 1.1f);
+
+    float2 f = frac(cellUV);
+    float2 edge = min(f, 1.0f - f);
+    if (min(edge.x, edge.y) < 0.02f)
+        albedo *= 0.45f;
+
+    float2 cell = floor(cellUV);
+    if (gFrame.hoverCell.y > 0.5f && cell.x == gFrame.hoverCell.x && cell.y == gFrame.hoverCell.z)
+        albedo = lerp(albedo, gFrame.hoverCell.y < 1.5f ? float3(0.2f, 0.9f, 0.3f) : float3(0.9f, 0.2f, 0.2f), 0.45f);
+
+    Out = float4(albedo, 1.0f);
+    RETURN(Out);
+}

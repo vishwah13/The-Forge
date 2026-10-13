@@ -5,3 +5,27 @@
 
 #rootsig compute.rootsig
 #end
+
+#vert unit.vert
+#include "Unit.vert.fsl"
+#end
+
+#frag unit.frag
+#include "Unit.frag.fsl"
+#end
+
+#vert ground.vert
+#include "Ground.vert.fsl"
+#end
+
+#frag ground.frag
+#include "Ground.frag.fsl"
+#end
+
+#vert billboard.vert
+#include "Billboard.vert.fsl"
+#end
+
+#frag billboard.frag
+#include "Billboard.frag.fsl"
+#end

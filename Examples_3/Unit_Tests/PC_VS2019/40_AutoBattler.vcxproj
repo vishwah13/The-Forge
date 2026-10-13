@@ -145,13 +145,22 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\src\40_AutoBattler\AutoBattlerSim.h" />
+    <ClInclude Include="..\src\40_AutoBattler\Shaders\Shared.h" />
+    <ClInclude Include="..\src\40_AutoBattler\Shaders\FSL\Global.srt.h" />
     <ClInclude Include="..\..\..\Common_3\Game\ThirdParty\OpenSource\flecs\flecs.h" />
   </ItemGroup>
   <ItemGroup>
     <None Include="..\src\40_AutoBattler\GPUCfg\gpu.cfg" />
   </ItemGroup>
   <ItemGroup>
+    <FSLShader Include="..\src\40_AutoBattler\Shaders\FSL\AutoBattler.h.fsl" />
+    <FSLShader Include="..\src\40_AutoBattler\Shaders\FSL\Billboard.frag.fsl" />
+    <FSLShader Include="..\src\40_AutoBattler\Shaders\FSL\Billboard.vert.fsl" />
+    <FSLShader Include="..\src\40_AutoBattler\Shaders\FSL\Ground.frag.fsl" />
+    <FSLShader Include="..\src\40_AutoBattler\Shaders\FSL\Ground.vert.fsl" />
     <FSLShader Include="..\src\40_AutoBattler\Shaders\FSL\Shaders.list" />
+    <FSLShader Include="..\src\40_AutoBattler\Shaders\FSL\Unit.frag.fsl" />
+    <FSLShader Include="..\src\40_AutoBattler\Shaders\FSL\Unit.vert.fsl" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

@@ -1,0 +1,40 @@
+#include "../../../../../../Common_3/Graphics/ShaderUtilities.h.fsl"
+#include "AutoBattler.h.fsl"
+
+STRUCT(VSInput)
+{
+    DATA(float3, Position, POSITION);
+    DATA(uint, Normal, NORMAL);
+    DATA(uint, UV, TEXCOORD0);
+    DATA(float4, BoneWeights, WEIGHTS);
+    DATA(uint4, BoneIndices, JOINTS);
+};
+
+STRUCT(VSOutput)
+{
+    DATA(float4, Position, SV_Position);
+    DATA(float3, Normal, NORMAL);
+    DATA(float2, UV, TEXCOORD0);
+    DATA(float4, Color, COLOR0);
+};
+
+ROOT_SIGNATURE(DefaultRootSignature)
+VSOutput VS_MAIN(VSInput In, SV_InstanceID(uint) instanceId)
+{
+    INIT_MAIN;
+    VSOutput Out;
+
+    float4x4 boneTransform = gBoneMatrices.boneMatrix[In.BoneIndices[0]] * In.BoneWeights[0];
+    boneTransform += gBoneMatrices.boneMatrix[In.BoneIndices[1]] * In.BoneWeights[1];
+    boneTransform += gBoneMatrices.boneMatrix[In.BoneIndices[2]] * In.BoneWeights[2];
+    boneTransform += gBoneMatrices.boneMatrix[In.BoneIndices[3]] * In.BoneWeights[3];
+
+    float4x4 world = gUnitInstances[instanceId].world;
+    float4   worldPos = mul(world, mul(boneTransform, float4(In.Position, 1.0f)));
+    Out.Position = mul(gFrame.viewProj, worldPos);
+    float3 normal = decodeDir(unpackUnorm2x16(In.Normal));
+    Out.Normal = normalize(mul(world, mul(boneTransform, float4(normal, 0.0f))).xyz);
+    Out.UV = unpack2Floats(In.UV);
+    Out.Color = gUnitInstances[instanceId].color;
+    RETURN(Out);
+}

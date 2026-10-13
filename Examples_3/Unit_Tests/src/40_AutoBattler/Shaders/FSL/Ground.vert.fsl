@@ -1,0 +1,20 @@
+#include "AutoBattler.h.fsl"
+
+STRUCT(VSOutput)
+{
+    DATA(float4, Position, SV_Position);
+    DATA(float2, WorldXZ, TEXCOORD0);
+};
+
+ROOT_SIGNATURE(DefaultRootSignature)
+VSOutput VS_MAIN(SV_VertexID(uint) vertexId)
+{
+    INIT_MAIN;
+    VSOutput Out;
+    // Two triangles over the arena: (0,0) (1,0) (1,1) and (0,0) (1,1) (0,1).
+    float2 corner = float2((vertexId == 1 || vertexId == 2 || vertexId == 4) ? 1.0f : 0.0f,
+                           (vertexId == 2 || vertexId == 4 || vertexId == 5) ? 1.0f : 0.0f);
+    Out.WorldXZ = corner * gFrame.arena.x;
+    Out.Position = mul(gFrame.viewProj, float4(Out.WorldXZ.x, 0.0f, Out.WorldXZ.y, 1.0f));
+    RETURN(Out);
+}

@@ -42,6 +42,7 @@ static const float    MAX_STEP = 1.0f / 30.0f;
 static const int32_t  START_GOLD = 10;
 static const float    UNIT_RADIUS = 0.4f;
 static const float    PROJECTILE_SPEED = 15.0f;
+static const uint32_t MAX_BILLBOARDS = MAX_UNITS + MAX_PROJECTILES;
 
 struct UnitStats
 {
@@ -56,6 +57,28 @@ struct UnitStats
     float       mScale;
 };
 extern const UnitStats gUnitStats[UNIT_TYPE_COUNT];
+
+// GPU instance layouts. Must match UnitInstance/BillboardInstance in Shaders/FSL/AutoBattler.h.fsl.
+struct UnitInstance
+{
+    mat4   mWorld;
+    float4 mColor; // rgb team colour, a = hit flash [0,1]
+};
+
+struct BillboardInstance
+{
+    float4 mCenterHalfWidth;      // xyz world centre, w half width
+    float4 mFullColorFill;        // rgb colour left of the fill line, a = fill fraction [0,1]
+    float4 mEmptyColorHalfHeight; // rgb colour right of the fill line, a = half height
+};
+
+struct RenderData
+{
+    UnitInstance*      pUnits;      // capacity MAX_UNITS
+    BillboardInstance* pBillboards; // capacity MAX_BILLBOARDS
+    uint32_t           mUnitCount;
+    uint32_t           mBillboardCount;
+};
 
 struct BattleSim;
 
@@ -84,6 +107,9 @@ uint32_t    simGetUnitCount(BattleSim* pSim, Team team);
 float       simGetBattleTime(const BattleSim* pSim);
 uint32_t    simGetProjectileCount(const BattleSim* pSim);
 const char* simGetMessage(const BattleSim* pSim);
+
+// Writes one UnitInstance per unit, a health bar per damaged unit and a billboard per projectile.
+void simFillRenderData(BattleSim* pSim, RenderData* pOut);
 
 // Pure helpers, also used by the app's mouse picking.
 bool   worldToCell(float x, float z, int32_t* pCellX, int32_t* pCellZ);

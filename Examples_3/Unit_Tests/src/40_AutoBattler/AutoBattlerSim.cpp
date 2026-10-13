@@ -785,6 +785,59 @@ float simGetBattleTime(const BattleSim* p) { return p->mBattleTime; }
 
 uint32_t simGetProjectileCount(const BattleSim* p) { return p->mProjectileCount; }
 
+//--------------------------------------------------------------------------------------------
+// Render data
+//--------------------------------------------------------------------------------------------
+static const float3 TEAM_COLORS[TEAM_COUNT] = { float3(0.30f, 0.55f, 1.00f), float3(1.00f, 0.30f, 0.25f) };
+static const float  HEALTH_BAR_HEIGHT = 2.2f;
+
+void simFillRenderData(BattleSim* p, RenderData* pOut)
+{
+    pOut->mUnitCount = 0;
+    pOut->mBillboardCount = 0;
+
+    ecs_iter_t it = ecs_query_iter(p->pWorld, p->pUnitQuery);
+    while (ecs_query_next(&it))
+    {
+        const Position* pos = ecs_field(&it, Position, 0);
+        const Unit*     unit = ecs_field(&it, Unit, 1);
+        const Health*   health = ecs_field(&it, Health, 2);
+        for (int32_t i = 0; i < it.count; ++i)
+        {
+            ASSERT(pOut->mUnitCount < MAX_UNITS);
+            const float   scale = gUnitStats[unit[i].type].mScale;
+            const float3& color = TEAM_COLORS[unit[i].team];
+            UnitInstance& instance = pOut->pUnits[pOut->mUnitCount++];
+            instance.mWorld = mat4::translation(vec3(pos[i].x, 0.0f, pos[i].z)) * mat4::rotationY(unit[i].yaw) * mat4::scale(vec3(scale));
+            instance.mColor = float4(color.x, color.y, color.z, health[i].hitFlash > 0.0f ? health[i].hitFlash : 0.0f);
+
+            if (health[i].hp < health[i].maxHp)
+            {
+                ASSERT(pOut->mBillboardCount < MAX_BILLBOARDS);
+                const float        fill = health[i].hp > 0.0f ? health[i].hp / health[i].maxHp : 0.0f;
+                BillboardInstance& bar = pOut->pBillboards[pOut->mBillboardCount++];
+                bar.mCenterHalfWidth = float4(pos[i].x, HEALTH_BAR_HEIGHT * scale, pos[i].z, 0.4f);
+                bar.mFullColorFill = float4(0.2f, 0.9f, 0.25f, fill);
+                bar.mEmptyColorHalfHeight = float4(0.55f, 0.08f, 0.08f, 0.06f);
+            }
+        }
+    }
+
+    it = ecs_query_iter(p->pWorld, p->pProjectileQuery);
+    while (ecs_query_next(&it))
+    {
+        const Projectile* projectile = ecs_field(&it, Projectile, 0);
+        for (int32_t i = 0; i < it.count; ++i)
+        {
+            ASSERT(pOut->mBillboardCount < MAX_BILLBOARDS);
+            BillboardInstance& b = pOut->pBillboards[pOut->mBillboardCount++];
+            b.mCenterHalfWidth = float4(projectile[i].x, projectile[i].y, projectile[i].z, 0.12f);
+            b.mFullColorFill = float4(1.0f, 0.85f, 0.2f, 1.0f);
+            b.mEmptyColorHalfHeight = float4(1.0f, 0.85f, 0.2f, 0.12f);
+        }
+    }
+}
+
 uint32_t simGetUnitCount(BattleSim* p, Team team)
 {
     uint32_t   count = 0;

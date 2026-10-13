@@ -345,6 +345,71 @@ static void testThreadCountDoesNotChangeOutcome(TestContext* pCtx)
     CHECK(single.mPlayerHp == multi.mPlayerHp);
 }
 
+static RenderData allocRenderData()
+{
+    RenderData data = {};
+    data.pUnits = (UnitInstance*)tf_malloc(sizeof(UnitInstance) * MAX_UNITS);
+    data.pBillboards = (BillboardInstance*)tf_malloc(sizeof(BillboardInstance) * MAX_BILLBOARDS);
+    return data;
+}
+
+static void freeRenderData(RenderData* pData)
+{
+    tf_free(pData->pUnits);
+    tf_free(pData->pBillboards);
+}
+
+static void testRenderDataPrep(TestContext* pCtx)
+{
+    BattleSim* s = simCreate(1);
+    simTestClearBoard(s);
+    simTestSetCell(s, 0, 0, UNIT_MELEE);
+    simTestSetCell(s, 15, 15, UNIT_TANK);
+    RenderData data = allocRenderData();
+    simFillRenderData(s, &data);
+    CHECK(data.mUnitCount == 25u + 9u);
+    CHECK(data.mBillboardCount == 0u); // full health, no projectiles
+
+    uint32_t blue = 0;
+    bool     onGround = true;
+    bool     noFlash = true;
+    for (uint32_t i = 0; i < data.mUnitCount; ++i)
+    {
+        const Vector4 t = data.pUnits[i].mWorld.getCol3();
+        onGround = onGround && t.getY() == 0.0f && t.getX() > 0.0f && t.getX() < ARENA_SIZE && t.getZ() > 0.0f && t.getZ() < ARENA_SIZE;
+        if (data.pUnits[i].mColor.z > data.pUnits[i].mColor.x)
+            ++blue;
+        noFlash = noFlash && data.pUnits[i].mColor.w == 0.0f;
+    }
+    CHECK(onGround);
+    CHECK(noFlash);
+    CHECK(blue == 25u);
+    freeRenderData(&data);
+    simDestroy(s);
+}
+
+static void testRenderDataBattle(TestContext* pCtx)
+{
+    BattleSim* s = simCreate(1);
+    simTestClearBoard(s);
+    simTestSetCell(s, 8, 7, UNIT_RANGED);
+    simTestSetCell(s, 8, 8, UNIT_TANK);
+    CHECK(simStartBattle(s));
+    stepFor(s, 0.75f); // first volley has landed, so at least one tank is damaged
+    RenderData data = allocRenderData();
+    simFillRenderData(s, &data);
+    CHECK(data.mUnitCount == simGetUnitCount(s, TEAM_PLAYER) + simGetUnitCount(s, TEAM_ENEMY));
+    CHECK(data.mUnitCount <= MAX_UNITS);
+    CHECK(data.mBillboardCount >= simGetProjectileCount(s) + 1u); // projectiles + at least one damaged tank
+    CHECK(data.mBillboardCount <= MAX_BILLBOARDS);
+    bool fillInRange = true;
+    for (uint32_t i = 0; i < data.mBillboardCount; ++i)
+        fillInRange = fillInRange && data.pBillboards[i].mFullColorFill.w >= 0.0f && data.pBillboards[i].mFullColorFill.w <= 1.0f;
+    CHECK(fillInRange);
+    freeRenderData(&data);
+    simDestroy(s);
+}
+
 typedef void (*TestFn)(TestContext*);
 
 struct NamedTest
@@ -373,6 +438,8 @@ int runAutoBattlerSelfTest(const char* pResultFileName)
         { "delta time clamp", testDeltaTimeClamp },
         { "restart mid battle", testRestartMidBattle },
         { "thread count does not change outcome", testThreadCountDoesNotChangeOutcome },
+        { "render data in prep", testRenderDataPrep },
+        { "render data in battle", testRenderDataBattle },
     };
     for (uint32_t i = 0; i < sizeof(tests) / sizeof(tests[0]); ++i)
     {

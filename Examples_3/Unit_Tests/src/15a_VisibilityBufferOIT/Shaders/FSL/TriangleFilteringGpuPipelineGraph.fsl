@@ -63,7 +63,7 @@ void Entry_Node(DispatchNodeInputRecord<EntryRecord> inputData,
 ROOT_SIGNATURE(ComputeRootSignature)
 [Shader("node")]
 [NodeLaunch("broadcasting")]
-[NodeMaxDispatchGrid(511,1,1)]
+[NodeMaxDispatchGrid(GPU_PIPELINE_MAX_DISPATCH_GROUPS,1,1)]
 NUM_THREADS(VB_COMPUTE_THREADS, 1, 1)
 void Filter_Node(in uint3 threadId : SV_GroupThreadID, in uint3 groupId : SV_GroupID, DispatchNodeInputRecord<FilterRecord> inputData)
 {

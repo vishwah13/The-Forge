@@ -263,7 +263,6 @@ const GPUProperty availableGpuProperties[] = {
         "waveopssupportstage", mWaveOpsSupportedStageFlags, [](const char* str) { return (uint32_t)stringToShaderStage(str); },
         [](uint32_t stage) { return shaderStageToString(stage); }),
     GPU_CONFIG_PROPERTY("64bitatomicssupported", m64BitAtomicsSupported),
-    GPU_CONFIG_PROPERTY("workgraphsupported", mWorkgraphSupported),
     GPU_CONFIG_PROPERTY_GLOBAL("sceneres", gSceneResolutionIndex),
     GPU_CONFIG_PROPERTY("target", mGPUTarget, [](const char* str) { return (uint32_t)stringToTarget(str); })
 };

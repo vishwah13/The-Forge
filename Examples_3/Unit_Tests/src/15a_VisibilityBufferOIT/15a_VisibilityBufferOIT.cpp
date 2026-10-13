@@ -1287,6 +1287,9 @@ public:
         {
             updateVBMeshFilterGroupsDesc.mFrameIndex = i;
             gVBPreFilterStats[i] = updateVBMeshFilterGroups(pVisibilityBuffer, &updateVBMeshFilterGroupsDesc);
+            ASSERTMSG(gVBPreFilterStats[i].mNumDispatchGroups <= GPU_PIPELINE_MAX_DISPATCH_GROUPS,
+                      "Scene needs %u triangle filtering groups, GPU pipeline workgraph supports %u",
+                      gVBPreFilterStats[i].mNumDispatchGroups, GPU_PIPELINE_MAX_DISPATCH_GROUPS);
         }
 
         LOGF(LogLevel::eINFO, "Setup buffers : %f ms", getHiresTimerUSec(&setupBuffersTimer, true) / 1000.0f);

@@ -58,6 +58,10 @@ STRUCT(MeshData)
 
 #include "../../../../../../Common_3/Renderer/VisibilityBuffer/Shaders/FSL/VisibilityBufferShaderDefs.h.fsl"
 
+// Max triangle filtering groups the GPU pipeline workgraph can launch (NodeMaxDispatchGrid of Filter_Node).
+// D3D12 caps a dispatch grid dimension at 65535; launching more groups than declared is undefined behavior.
+#define GPU_PIPELINE_MAX_DISPATCH_GROUPS 65535
+
 #define MATERIAL_ID_LOW_BIT 0   // 16 bits for materialID
 #define FLAG_LOW_BIT  16        // 16 bits for flags
 

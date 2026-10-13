@@ -36,7 +36,6 @@ New unit test sample, modelled on `28_Skinning` (skinned Stormtrooper) and `19_C
 |---|---|
 | Units | `Meshes/stormtrooper/riggedMesh.bin`, `Animation/stormtrooper/skeleton.ozz`, `Textures/dds/Stormtrooper_D.tex` |
 | Victory dance | `Animation/stormtrooper/animations/dance.ozz` |
-| Projectiles | `Meshes/cube.bin` |
 | Ground | `Textures/dds/PBR/copper_tiles_01/1K/Albedo.tex` |
 | Text | existing UI fonts |
 
@@ -81,27 +80,28 @@ Setup follows 19_CodeHotReload: `initEntityComponentSystem()`, `ecs_init()`,
 
 **Components**
 
-- `Position { float2 p; }`, `Velocity { float2 v; }`, `Facing { float yaw; }`
-- `Unit { uint8 team; uint8 type; uint16 squadCell; float radius; }`
+- `Position { float x, z; }`
+- `Unit { uint8 team; uint8 type; uint16 cell; float radius; float yaw; }`
 - `Health { float hp, maxHp, hitFlash; }`
-- `Attack { float damage, range, cooldown, timer; ecs_entity_t target; }`
-- `Projectile { ecs_entity_t target; float damage; uint8 team; }` (plus `Position`)
-- Singletons: `GameState`, `SpatialGrid` (owns flat arrays, not per-entity data)
+- `Attack { ecs_entity_t target; float timer, retargetTimer; uint32 inRange; }` (damage/range/cooldown come from the unit type table)
+- `GridSlot { uint32 slot; }` — the unit's index in this frame's grid snapshot
+- `Projectile { ecs_entity_t target; float x, y, z, damage; }`
+- Game state (phase, round, gold, timers, board) and the spatial grid live in the `BattleSim` struct passed to systems as context, not as ECS singletons.
 
 **Spatial grid:** 2 m buckets over the arena. Rebuilt each frame into flat arrays (counting sort
 by bucket) holding entity id, position, team, radius. Queries read only this snapshot, so systems
 can run in parallel without reading other entities' live components.
 
-**Systems** (run only in Battle; disabled with `ecs_enable` in other phases):
+**Systems** (`ecs_progress` is only called during Battle):
 
 | Phase | System | Threads | Work |
 |---|---|---|---|
-| PreUpdate | `BuildGridSystem` | 1 | Rebuild grid snapshot, count living units per team |
+| (before `ecs_progress`) | `buildGrid()` | 1 | Rebuild grid snapshot, write each unit's `GridSlot` |
 | OnUpdate | `SteerSystem` | multi | Retarget (every 0.25 s, or when target died) by searching grid rings outward for nearest enemy; set velocity toward target unless in range; add separation from grid neighbours; clamp to arena; integrate position; update facing |
 | OnUpdate | `AttackSystem` | 1 | Tick cooldowns; in range → apply damage to target `Health` (melee) or spawn projectile (ranged). Single-threaded because it writes other entities |
 | OnUpdate | `ProjectileSystem` | 1 | Move toward target; on contact apply damage and delete; delete if target gone |
-| PostUpdate | `DeathSystem` | 1 | `hp <= 0` → `ecs_delete` (deferred, safe) |
-| PostUpdate | `RoundEndSystem` | 1 | Uses team counts from the grid to switch to Result |
+| PostUpdate | `HealthSystem` | 1 | Decay hit flash; `hp <= 0` → `ecs_delete` (deferred, safe) |
+| (after `ecs_progress`) | phase check | 1 | Count units per team and switch to Victory/Defeat |
 
 Prep and Result phases still run a render-fill pass so units are drawn when idle.
 
@@ -119,7 +119,7 @@ per-frame GPU buffers. The sim never touches GPU objects.
 - **Ground:** quad with tiled copper albedo, darker tint on the enemy half, grid lines, highlighted
   hover cell in Prep (green = can place, red = cannot).
 - **Health bars:** instanced camera-facing quads above damaged units (green over red).
-- **Projectiles:** instanced small cubes, unlit yellow.
+- **Projectiles:** small yellow camera-facing squares, drawn by the same billboard pipeline as health bars.
 - **Camera:** looks down at ~60° over the arena centre. WASD/arrow pan, mouse wheel zoom, clamped
   to the arena.
 - **UI:** one window: phase, round, gold, unit counts per team, unit type radio buttons with cost,
@@ -135,9 +135,11 @@ per-frame GPU buffers. The sim never touches GPU objects.
 
 ## Verification
 
-- Debug build: startup self-check runs a headless battle in a separate Flecs world (2 player Melee
-  squads vs 1 enemy Melee squad, fixed dt 1/60 for up to 60 s) and asserts the player wins and the
-  enemy count reaches zero. The sim has no graphics dependency, so this needs no renderer.
+- `40_AutoBattler.exe --selftest` runs the simulation tests headless (no renderer), writes
+  `40_AutoBattler_selftest.txt` and exits with the failure count. Includes a scripted battle
+  (2 player Melee squads vs 1 enemy Melee squad, fixed dt 1/60) that must end in victory.
+- `40_AutoBattler.exe --smoke` plays a ~2,800-unit battle through the real renderer, writes
+  `40_AutoBattler_smoke.txt` (frames, average frame time, result) and quits.
 - Build Debug and Release for PC_VS2019.
 - Run manually: place squads, win a round (army persists, gold increases), lose a round (Defeat →
   Restart), fill toward ~2,000 units and confirm it stays interactive, check the log for

@@ -789,7 +789,7 @@ uint32_t simGetProjectileCount(const BattleSim* p) { return p->mProjectileCount;
 // Render data
 //--------------------------------------------------------------------------------------------
 static const float3 TEAM_COLORS[TEAM_COUNT] = { float3(0.30f, 0.55f, 1.00f), float3(1.00f, 0.30f, 0.25f) };
-static const float  HEALTH_BAR_HEIGHT = 2.2f;
+static const float  HEALTH_BAR_HEIGHT = 4.2f; // model units, above the 3.7-unit-tall bind pose
 
 void simFillRenderData(BattleSim* p, RenderData* pOut)
 {
@@ -805,7 +805,7 @@ void simFillRenderData(BattleSim* p, RenderData* pOut)
         for (int32_t i = 0; i < it.count; ++i)
         {
             ASSERT(pOut->mUnitCount < MAX_UNITS);
-            const float   scale = gUnitStats[unit[i].type].mScale;
+            const float   scale = gUnitStats[unit[i].type].mScale * UNIT_MODEL_SCALE;
             const float3& color = TEAM_COLORS[unit[i].team];
             UnitInstance& instance = pOut->pUnits[pOut->mUnitCount++];
             instance.mWorld = mat4::translation(vec3(pos[i].x, 0.0f, pos[i].z)) * mat4::rotationY(unit[i].yaw) * mat4::scale(vec3(scale));

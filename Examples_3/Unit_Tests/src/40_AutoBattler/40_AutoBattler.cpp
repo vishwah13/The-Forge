@@ -117,7 +117,17 @@ uint32_t gSmokeStartUnits = 0;
 float    gSmokeSeconds = 0.0f;
 Phase    gSmokeResult = PHASE_PREP;
 
+UIComponent* pGuiWindow = NULL;
+int32_t      gSelectedType = UNIT_MELEE;
+bool         gStartRequested = false;
+bool         gRestartRequested = false;
+InputEnum    CUSTOM_PLACE = {};
+InputEnum    CUSTOM_SELL = {};
+InputEnum    CUSTOM_ZOOM = {};
+
 static const char* PHASE_NAMES[] = { "Prep", "Battle", "Victory", "Defeat" };
+
+static float clampf(float v, float lo, float hi) { return v < lo ? lo : (v > hi ? hi : v); }
 
 static void writeTextFile(const char* pFileName, const char* pText)
 {
@@ -282,6 +292,13 @@ public:
         addResource(&textureDesc, NULL);
 
         AddCustomInputBindings();
+        inputAddCustomBindings(R"(
+ab_place; button; MOUSE_1; released
+ab_sell; button; MOUSE_2; released
+ab_zoom; buttonanalog; MOUSE_WHEEL_DOWN; 1.0f; MOUSE_WHEEL_UP; -1.0f)");
+        CUSTOM_PLACE = inputGetCustomBindingEnum("ab_place");
+        CUSTOM_SELL = inputGetCustomBindingEnum("ab_sell");
+        CUSTOM_ZOOM = inputGetCustomBindingEnum("ab_zoom");
 
         gRenderData.pUnits = (UnitInstance*)tf_malloc(sizeof(UnitInstance) * MAX_UNITS);
         gRenderData.pBillboards = (BillboardInstance*)tf_malloc(sizeof(BillboardInstance) * MAX_BILLBOARDS);
@@ -352,6 +369,7 @@ public:
         if (pReloadDesc->mType & (RELOAD_TYPE_RESIZE | RELOAD_TYPE_RENDERTARGET))
         {
             loadProfilerUI(mSettings.mWidth, mSettings.mHeight);
+            addGui();
             if (!addSwapChain())
                 return false;
             if (!addDepthBuffer())
@@ -393,6 +411,7 @@ public:
             removeSwapChain(pRenderer, pSwapChain);
             removeRenderTarget(pRenderer, pDepthBuffer);
             unloadProfilerUI();
+            uiRemoveComponent(pGuiWindow);
         }
 
         if (pReloadDesc->mType & RELOAD_TYPE_SHADER)
@@ -417,11 +436,88 @@ public:
         if (gSmokeMode)
             updateSmoke(deltaTime);
 
+        if (gStartRequested)
+        {
+            gStartRequested = false;
+            simStartBattle(pSim);
+        }
+        if (gRestartRequested)
+        {
+            gRestartRequested = false;
+            simRestart(pSim);
+        }
+
         simStep(pSim, deltaTime);
+        updateCameraInput(deltaTime);
         updateCamera(deltaTime);
+        updatePicking();
         updateBones(deltaTime);
         simFillRenderData(pSim, &gRenderData);
         updateHud();
+    }
+
+    void addGui()
+    {
+        UIComponentDesc guiDesc = {};
+        guiDesc.mStartPosition = vec2(mSettings.mWidth * 0.78f, mSettings.mHeight * 0.05f);
+        guiDesc.mStartSize = vec2(300.0f, 240.0f);
+        guiDesc.mFontID = 0;
+        guiDesc.mFontSize = 16.0f;
+        uiAddComponent("Auto Battler", &guiDesc, &pGuiWindow);
+
+        for (int32_t t = 0; t < UNIT_TYPE_COUNT; ++t)
+        {
+            char label[64];
+            snprintf(label, sizeof(label), "%s squad x%d (%d gold)", gUnitStats[t].pName, gUnitStats[t].mSquadSide * gUnitStats[t].mSquadSide,
+                     gUnitStats[t].mCost);
+            RadioButtonWidget radio = {};
+            radio.pData = &gSelectedType;
+            radio.mRadioId = t;
+            uiAddComponentWidget(pGuiWindow, label, &radio, WIDGET_TYPE_RADIO_BUTTON);
+        }
+
+        ButtonWidget startButton = {};
+        UIWidget*    pStart = uiAddComponentWidget(pGuiWindow, "Start Battle", &startButton, WIDGET_TYPE_BUTTON);
+        uiSetWidgetOnEditedCallback(pStart, NULL, [](void*) { gStartRequested = true; });
+
+        ButtonWidget restartButton = {};
+        UIWidget*    pRestart = uiAddComponentWidget(pGuiWindow, "Restart", &restartButton, WIDGET_TYPE_BUTTON);
+        uiSetWidgetOnEditedCallback(pRestart, NULL, [](void*) { gRestartRequested = true; });
+    }
+
+    void updateCameraInput(float deltaTime)
+    {
+        if (uiIsFocused())
+            return;
+        const float panSpeed = gCameraDistance * 0.8f;
+        gCameraTarget.x = clampf(gCameraTarget.x + inputGetValue(0, CUSTOM_MOVE_X) * panSpeed * deltaTime, 0.0f, ARENA_SIZE);
+        gCameraTarget.y = clampf(gCameraTarget.y + inputGetValue(0, CUSTOM_MOVE_Y) * panSpeed * deltaTime, 0.0f, ARENA_SIZE);
+        gCameraDistance = clampf(gCameraDistance + inputGetValue(0, CUSTOM_ZOOM) * 5.0f, 20.0f, 120.0f);
+    }
+
+    // Casts the mouse ray onto the ground, highlights the cell and buys/sells on click (prep only).
+    void updatePicking()
+    {
+        if (simGetPhase(pSim) != PHASE_PREP || uiIsFocused())
+            return;
+        const float ndcX = 2.0f * inputGetValue(0, CUSTOM_PT_X) / (float)mSettings.mWidth - 1.0f;
+        const float ndcY = 1.0f - 2.0f * inputGetValue(0, CUSTOM_PT_Y) / (float)mSettings.mHeight;
+        const float tanHalfX = tanf(CAMERA_FOV_X * 0.5f);
+        const float tanHalfY = tanHalfX * (float)mSettings.mHeight / (float)mSettings.mWidth;
+        const vec3  dir = normalize(gCameraForward + gCameraRight * (ndcX * tanHalfX) + gCameraUp * (ndcY * tanHalfY));
+
+        int32_t cellX = 0;
+        int32_t cellZ = 0;
+        if (!rayToCell(float3(gCameraEye.getX(), gCameraEye.getY(), gCameraEye.getZ()), float3(dir.getX(), dir.getY(), dir.getZ()), &cellX,
+                       &cellZ))
+            return;
+
+        const bool canBuy = simCanBuySquad(pSim, cellX, cellZ, (UnitType)gSelectedType);
+        gFrameUniforms.mHoverCell = float4((float)cellX, canBuy ? 1.0f : 2.0f, (float)cellZ, CELL_SIZE);
+        if (inputGetValue(0, CUSTOM_PLACE))
+            simBuySquad(pSim, cellX, cellZ, (UnitType)gSelectedType);
+        if (inputGetValue(0, CUSTOM_SELL))
+            simSellSquad(pSim, cellX, cellZ);
     }
 
     void updateCamera(float deltaTime)

@@ -43,6 +43,7 @@ static const int32_t  START_GOLD = 10;
 static const float    UNIT_RADIUS = 0.4f;
 static const float    PROJECTILE_SPEED = 15.0f;
 static const uint32_t MAX_BILLBOARDS = MAX_UNITS + MAX_PROJECTILES;
+static const float    UNIT_MODEL_SCALE = 0.5f; // Stormtrooper bind pose is ~3.7 m tall; render it at human height
 
 struct UnitStats
 {

@@ -384,6 +384,16 @@ static void testRenderDataPrep(TestContext* pCtx)
     CHECK(onGround);
     CHECK(noFlash);
     CHECK(blue == 25u);
+
+    // Units render at UNIT_MODEL_SCALE x their type scale (the mesh's bind pose is ~3.7 m tall).
+    bool scaled = true;
+    for (uint32_t i = 0; i < data.mUnitCount; ++i)
+    {
+        const float expected = UNIT_MODEL_SCALE * (data.pUnits[i].mColor.z > data.pUnits[i].mColor.x ? gUnitStats[UNIT_MELEE].mScale
+                                                                                                       : gUnitStats[UNIT_TANK].mScale);
+        scaled = scaled && fabsf(length(data.pUnits[i].mWorld.getCol0().getXYZ()) - expected) < 1e-4f;
+    }
+    CHECK(scaled);
     freeRenderData(&data);
     simDestroy(s);
 }

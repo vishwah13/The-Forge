@@ -1,7 +1,7 @@
 // 40_AutoBattler: top-down auto battler. Gameplay lives in AutoBattlerSim (Flecs); this file owns
 // rendering, camera, input and UI.
 
-#include "Shaders/Shared.h"
+#include "AnimationBake.h"
 #include "AutoBattlerSim.h"
 
 #include <stdlib.h>
@@ -24,10 +24,6 @@
 #include "../../../../Common_3/Utilities/RingBuffer.h"
 
 // Animation
-#include "../../../../Common_3/Resources/AnimationSystem/Animation/AnimatedObject.h"
-#include "../../../../Common_3/Resources/AnimationSystem/Animation/Animation.h"
-#include "../../../../Common_3/Resources/AnimationSystem/Animation/Clip.h"
-#include "../../../../Common_3/Resources/AnimationSystem/Animation/ClipController.h"
 #include "../../../../Common_3/Resources/AnimationSystem/Animation/Rig.h"
 
 #include "../../../../Common_3/Utilities/Math/MathTypes.h"
@@ -65,7 +61,7 @@ Texture*      pUnitTexture = NULL;
 Texture*      pGroundTexture = NULL;
 
 Buffer* pFrameUniformBuffers[gDataBufferCount] = {};
-Buffer* pBoneBuffers[gDataBufferCount] = {};
+Buffer* pBonePaletteBuffer = NULL; // every baked animation frame, static
 Buffer* pUnitInstanceBuffers[gDataBufferCount] = {};
 Buffer* pBillboardBuffers[gDataBufferCount] = {};
 
@@ -79,20 +75,12 @@ struct FrameUniforms
     float4 mArena;     // x = arena size, y = world z where the enemy half starts
 };
 FrameUniforms gFrameUniforms = {};
-mat4          gBoneMatrices[MAX_NUM_BONES];
-mat4          gBindPoseBones[MAX_NUM_BONES];
 
-// Victory dance: one animated object drives the shared bone palette of every unit.
-Rig            gRig;
-Clip           gDanceClip;
-ClipController gDanceController;
-Animation      gDanceAnimation;
-AnimatedObject gDanceObject;
-float          gDanceTime = 0.0f;
+Rig             gRig; // Stormtrooper skeleton
+BakedAnimations gBaked = {};
 
 BattleSim* pSim = NULL;
 RenderData gRenderData = {};
-Phase      gLastPhase = PHASE_PREP;
 
 // Camera orbits a ground target at a fixed pitch.
 const float CAMERA_PITCH = 55.0f * PI / 180.0f;
@@ -151,17 +139,7 @@ public:
                 gSmokeMode = true;
         }
 
-        // Animation setup, as in 28_Skinning.
         gRig.Initialize(RD_ANIMATIONS, "stormtrooper/skeleton.ozz");
-        gDanceClip.Initialize(RD_ANIMATIONS, "stormtrooper/animations/dance.ozz", &gRig);
-        gDanceController.Initialize(gDanceClip.GetDuration(), &gDanceTime);
-        AnimationDesc animationDesc{};
-        animationDesc.mRig = &gRig;
-        animationDesc.mNumLayers = 1;
-        animationDesc.mLayerProperties[0].mClip = &gDanceClip;
-        animationDesc.mLayerProperties[0].mClipController = &gDanceController;
-        gDanceAnimation.Initialize(animationDesc);
-        gDanceObject.Initialize(&gRig, &gDanceAnimation);
 
         RendererDesc settings;
         memset(&settings, 0, sizeof(settings));
@@ -219,9 +197,6 @@ public:
         {
             ubDesc.mDesc.mSize = sizeof(FrameUniforms);
             ubDesc.ppBuffer = &pFrameUniformBuffers[i];
-            addResource(&ubDesc, NULL);
-            ubDesc.mDesc.mSize = sizeof(mat4) * MAX_NUM_BONES;
-            ubDesc.ppBuffer = &pBoneBuffers[i];
             addResource(&ubDesc, NULL);
         }
 
@@ -308,11 +283,22 @@ ab_zoom; buttonanalog; MOUSE_WHEEL_DOWN; 1.0f; MOUSE_WHEEL_UP; -1.0f)");
 
         waitForAllResourceLoads();
 
-        // Bone palette for the bind pose, used whenever nobody is dancing.
-        ASSERT(pUnitGeomData->mJointCount <= MAX_NUM_BONES);
-        gDanceObject.ComputeBindPose(gDanceObject.mRootTransform);
-        for (uint32_t i = 0; i < pUnitGeomData->mJointCount; ++i)
-            gBindPoseBones[i] = gDanceObject.mJointWorldMats[pUnitGeomData->pJointRemaps[i]] * pUnitGeomData->pInverseBindPoses[i];
+        // Bake idle/walk (retargeted from the stickFigure) and dance into one static palette table.
+        if (!bakeAnimations(&gRig, pUnitGeomData, &gBaked))
+            return false;
+        BufferLoadDesc paletteDesc = {};
+        paletteDesc.mDesc.mDescriptors = DESCRIPTOR_TYPE_BUFFER;
+        paletteDesc.mDesc.mMemoryUsage = RESOURCE_MEMORY_USAGE_GPU_ONLY;
+        paletteDesc.mDesc.mStartState = RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+        paletteDesc.mDesc.mFirstElement = 0;
+        paletteDesc.mDesc.mElementCount = (uint64_t)gBaked.mFrameTotal * gBaked.mJointCount;
+        paletteDesc.mDesc.mStructStride = sizeof(mat4);
+        paletteDesc.mDesc.mSize = paletteDesc.mDesc.mElementCount * sizeof(mat4);
+        paletteDesc.pData = gBaked.pPalettes;
+        paletteDesc.ppBuffer = &pBonePaletteBuffer;
+        addResource(&paletteDesc, NULL);
+        waitForAllResourceLoads();
+        freeBakedAnimations(&gBaked); // uploaded; offsets and frame counts stay valid
 
         gFrameIndex = 0;
         return true;
@@ -326,9 +312,6 @@ ab_zoom; buttonanalog; MOUSE_WHEEL_DOWN; 1.0f; MOUSE_WHEEL_UP; -1.0f)");
         tf_free(gRenderData.pBillboards);
 
         gRig.Exit();
-        gDanceClip.Exit();
-        gDanceAnimation.Exit();
-        gDanceObject.Exit();
 
         exitProfiler();
         exitUserInterface();
@@ -337,7 +320,6 @@ ab_zoom; buttonanalog; MOUSE_WHEEL_DOWN; 1.0f; MOUSE_WHEEL_UP; -1.0f)");
         for (uint32_t i = 0; i < gDataBufferCount; ++i)
         {
             removeResource(pFrameUniformBuffers[i]);
-            removeResource(pBoneBuffers[i]);
             removeResource(pUnitInstanceBuffers[i]);
             removeResource(pBillboardBuffers[i]);
         }
@@ -347,6 +329,7 @@ ab_zoom; buttonanalog; MOUSE_WHEEL_DOWN; 1.0f; MOUSE_WHEEL_UP; -1.0f)");
         pUnitGeom = NULL;
         removeResource(pUnitTexture);
         removeResource(pGroundTexture);
+        removeResource(pBonePaletteBuffer);
 
         exitSemaphore(pRenderer, pImageAcquiredSemaphore);
         exitGpuCmdRing(pRenderer, &gGraphicsCmdRing);
@@ -451,8 +434,13 @@ ab_zoom; buttonanalog; MOUSE_WHEEL_DOWN; 1.0f; MOUSE_WHEEL_UP; -1.0f)");
         updateCameraInput(deltaTime);
         updateCamera(deltaTime);
         updatePicking();
-        updateBones(deltaTime);
         simFillRenderData(pSim, &gRenderData);
+        // The sim says which clip and time each unit plays; turn that into its palette offset.
+        for (uint32_t i = 0; i < gRenderData.mUnitCount; ++i)
+        {
+            float4& anim = gRenderData.pUnits[i].mAnim;
+            anim.x = (float)bakedPaletteOffset(gBaked, (AnimClip)(uint32_t)anim.x, anim.y);
+        }
         updateHud();
     }
 
@@ -539,25 +527,6 @@ ab_zoom; buttonanalog; MOUSE_WHEEL_DOWN; 1.0f; MOUSE_WHEEL_UP; -1.0f)");
         gFrameUniforms.mHoverCell = float4(0.0f, 0.0f, 0.0f, CELL_SIZE);
     }
 
-    void updateBones(float deltaTime)
-    {
-        const Phase phase = simGetPhase(pSim);
-        const bool  dancing = phase == PHASE_VICTORY || phase == PHASE_DEFEAT;
-        if (dancing && gLastPhase != phase)
-            gDanceController.SetTimeRatioHard(0.0f);
-        gLastPhase = phase;
-
-        if (!dancing)
-        {
-            memcpy(gBoneMatrices, gBindPoseBones, sizeof(gBoneMatrices));
-            return;
-        }
-        gDanceObject.Update(deltaTime);
-        gDanceObject.ComputePose(gDanceObject.mRootTransform);
-        for (uint32_t i = 0; i < pUnitGeomData->mJointCount; ++i)
-            gBoneMatrices[i] = gDanceObject.mJointWorldMats[pUnitGeomData->pJointRemaps[i]] * pUnitGeomData->pInverseBindPoses[i];
-    }
-
     void updateHud()
     {
         const Phase phase = simGetPhase(pSim);
@@ -641,11 +610,6 @@ ab_zoom; buttonanalog; MOUSE_WHEEL_DOWN; 1.0f; MOUSE_WHEEL_UP; -1.0f)");
         beginUpdateResource(&frameUpdate);
         memcpy(frameUpdate.pMappedData, &gFrameUniforms, sizeof(gFrameUniforms));
         endUpdateResource(&frameUpdate);
-
-        BufferUpdateDesc boneUpdate = { pBoneBuffers[gFrameIndex] };
-        beginUpdateResource(&boneUpdate);
-        memcpy(boneUpdate.pMappedData, gBoneMatrices, sizeof(mat4) * pUnitGeomData->mJointCount);
-        endUpdateResource(&boneUpdate);
 
         if (gRenderData.mUnitCount > 0)
         {
@@ -845,25 +809,25 @@ ab_zoom; buttonanalog; MOUSE_WHEEL_DOWN; 1.0f; MOUSE_WHEEL_UP; -1.0f)");
 
     void prepareDescriptorSets()
     {
-        DescriptorData persistent[2] = {};
+        DescriptorData persistent[3] = {};
         persistent[0].mIndex = SRT_RES_IDX(SrtData, Persistent, gUnitTexture);
         persistent[0].ppTextures = &pUnitTexture;
         persistent[1].mIndex = SRT_RES_IDX(SrtData, Persistent, gGroundTexture);
         persistent[1].ppTextures = &pGroundTexture;
-        updateDescriptorSet(pRenderer, 0, pSetPersistent, 2, persistent);
+        persistent[2].mIndex = SRT_RES_IDX(SrtData, Persistent, gBonePalettes);
+        persistent[2].ppBuffers = &pBonePaletteBuffer;
+        updateDescriptorSet(pRenderer, 0, pSetPersistent, 3, persistent);
 
         for (uint32_t i = 0; i < gDataBufferCount; ++i)
         {
-            DescriptorData perFrame[4] = {};
+            DescriptorData perFrame[3] = {};
             perFrame[0].mIndex = SRT_RES_IDX(SrtData, PerFrame, gFrame);
             perFrame[0].ppBuffers = &pFrameUniformBuffers[i];
-            perFrame[1].mIndex = SRT_RES_IDX(SrtData, PerFrame, gBoneMatrices);
-            perFrame[1].ppBuffers = &pBoneBuffers[i];
-            perFrame[2].mIndex = SRT_RES_IDX(SrtData, PerFrame, gUnitInstances);
-            perFrame[2].ppBuffers = &pUnitInstanceBuffers[i];
-            perFrame[3].mIndex = SRT_RES_IDX(SrtData, PerFrame, gBillboards);
-            perFrame[3].ppBuffers = &pBillboardBuffers[i];
-            updateDescriptorSet(pRenderer, i, pSetPerFrame, 4, perFrame);
+            perFrame[1].mIndex = SRT_RES_IDX(SrtData, PerFrame, gUnitInstances);
+            perFrame[1].ppBuffers = &pUnitInstanceBuffers[i];
+            perFrame[2].mIndex = SRT_RES_IDX(SrtData, PerFrame, gBillboards);
+            perFrame[2].ppBuffers = &pBillboardBuffers[i];
+            updateDescriptorSet(pRenderer, i, pSetPerFrame, 3, perFrame);
         }
     }
 

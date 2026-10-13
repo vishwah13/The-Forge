@@ -420,6 +420,65 @@ static void testRenderDataBattle(TestContext* pCtx)
     simDestroy(s);
 }
 
+static uint32_t countClip(const RenderData& data, AnimClip clip, bool blueOnly)
+{
+    uint32_t n = 0;
+    for (uint32_t i = 0; i < data.mUnitCount; ++i)
+    {
+        const bool blue = data.pUnits[i].mColor.z > data.pUnits[i].mColor.x;
+        if ((uint32_t)data.pUnits[i].mAnim.x == (uint32_t)clip && (!blueOnly || blue))
+            ++n;
+    }
+    return n;
+}
+
+static void testAnimationState(TestContext* pCtx)
+{
+    BattleSim* s = simCreate(1);
+    setupMeleeSkirmish(s);
+    RenderData data = allocRenderData();
+
+    // Prep: everyone idles, clocks run and are not in lockstep.
+    simFillRenderData(s, &data);
+    CHECK(countClip(data, ANIM_IDLE, false) == data.mUnitCount);
+    const float t0 = data.pUnits[0].mAnim.y;
+    bool        offsets = false;
+    for (uint32_t i = 1; i < data.mUnitCount; ++i)
+        offsets = offsets || data.pUnits[i].mAnim.y != t0;
+    CHECK(offsets);
+    simStep(s, 0.5f / 15.0f);
+    simFillRenderData(s, &data);
+    CHECK(data.pUnits[0].mAnim.y > t0);
+
+    // Battle: the armies start 10+ m apart, so units walk towards each other.
+    CHECK(simStartBattle(s));
+    stepFor(s, 0.5f);
+    simFillRenderData(s, &data);
+    CHECK(countClip(data, ANIM_WALK, false) > 0u);
+
+    // Victory: the surviving player units dance.
+    runBattle(s, 60.0f);
+    CHECK(simGetPhase(s) == PHASE_VICTORY);
+    simFillRenderData(s, &data);
+    CHECK(data.mUnitCount > 0u && countClip(data, ANIM_DANCE, false) == data.mUnitCount);
+    simDestroy(s);
+
+    // Timeout loss: both armies are alive, only the enemy (winner) dances.
+    s = simCreate(1);
+    simTestClearBoard(s);
+    simTestSetCell(s, 0, 0, UNIT_MELEE);
+    simTestSetCell(s, 15, 15, UNIT_TANK);
+    CHECK(simStartBattle(s));
+    simTestSetBattleTime(s, BATTLE_TIME_LIMIT - 0.001f);
+    simStep(s, 1.0f / 60.0f);
+    CHECK(simGetPhase(s) == PHASE_DEFEAT);
+    simFillRenderData(s, &data);
+    CHECK(countClip(data, ANIM_DANCE, true) == 0u);
+    CHECK(countClip(data, ANIM_DANCE, false) == 9u);
+    freeRenderData(&data);
+    simDestroy(s);
+}
+
 typedef void (*TestFn)(TestContext*);
 
 struct NamedTest
@@ -450,6 +509,7 @@ int runAutoBattlerSelfTest(const char* pResultFileName)
         { "thread count does not change outcome", testThreadCountDoesNotChangeOutcome },
         { "render data in prep", testRenderDataPrep },
         { "render data in battle", testRenderDataBattle },
+        { "animation state", testAnimationState },
     };
     for (uint32_t i = 0; i < sizeof(tests) / sizeof(tests[0]); ++i)
     {

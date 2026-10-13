@@ -24,10 +24,12 @@ VSOutput VS_MAIN(VSInput In, SV_InstanceID(uint) instanceId)
     INIT_MAIN;
     VSOutput Out;
 
-    float4x4 boneTransform = gBoneMatrices.boneMatrix[In.BoneIndices[0]] * In.BoneWeights[0];
-    boneTransform += gBoneMatrices.boneMatrix[In.BoneIndices[1]] * In.BoneWeights[1];
-    boneTransform += gBoneMatrices.boneMatrix[In.BoneIndices[2]] * In.BoneWeights[2];
-    boneTransform += gBoneMatrices.boneMatrix[In.BoneIndices[3]] * In.BoneWeights[3];
+    // Each unit samples its own frame of the baked animation table.
+    uint     palette = uint(gUnitInstances[instanceId].anim.x);
+    float4x4 boneTransform = gBonePalettes[palette + In.BoneIndices[0]] * In.BoneWeights[0];
+    boneTransform += gBonePalettes[palette + In.BoneIndices[1]] * In.BoneWeights[1];
+    boneTransform += gBonePalettes[palette + In.BoneIndices[2]] * In.BoneWeights[2];
+    boneTransform += gBonePalettes[palette + In.BoneIndices[3]] * In.BoneWeights[3];
 
     float4x4 world = gUnitInstances[instanceId].world;
     float4   worldPos = mul(world, mul(boneTransform, float4(In.Position, 1.0f)));

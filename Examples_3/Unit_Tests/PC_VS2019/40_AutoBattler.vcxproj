@@ -141,11 +141,12 @@
     <ClCompile Include="..\src\40_AutoBattler\40_AutoBattler.cpp" />
     <ClCompile Include="..\src\40_AutoBattler\AutoBattlerSim.cpp" />
     <ClCompile Include="..\src\40_AutoBattler\AutoBattlerSelfTest.cpp" />
+    <ClCompile Include="..\src\40_AutoBattler\AnimationBake.cpp" />
     <ClCompile Include="..\..\..\Common_3\Game\ThirdParty\OpenSource\flecs\flecs.c" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\src\40_AutoBattler\AutoBattlerSim.h" />
-    <ClInclude Include="..\src\40_AutoBattler\Shaders\Shared.h" />
+    <ClInclude Include="..\src\40_AutoBattler\AnimationBake.h" />
     <ClInclude Include="..\src\40_AutoBattler\Shaders\FSL\Global.srt.h" />
     <ClInclude Include="..\..\..\Common_3\Game\ThirdParty\OpenSource\flecs\flecs.h" />
   </ItemGroup>

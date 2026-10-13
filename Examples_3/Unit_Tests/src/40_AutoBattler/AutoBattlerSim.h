@@ -59,11 +59,21 @@ struct UnitStats
 };
 extern const UnitStats gUnitStats[UNIT_TYPE_COUNT];
 
+// Animation clip a unit is playing. The app turns (clip, time) into a baked palette offset.
+enum AnimClip : uint8_t
+{
+    ANIM_IDLE = 0,
+    ANIM_WALK,
+    ANIM_DANCE,
+    ANIM_CLIP_COUNT
+};
+
 // GPU instance layouts. Must match UnitInstance/BillboardInstance in Shaders/FSL/AutoBattler.h.fsl.
 struct UnitInstance
 {
     mat4   mWorld;
     float4 mColor; // rgb team colour, a = hit flash [0,1]
+    float4 mAnim;  // sim writes x = AnimClip, y = clip time (s); the app replaces x with the palette offset
 };
 
 struct BillboardInstance

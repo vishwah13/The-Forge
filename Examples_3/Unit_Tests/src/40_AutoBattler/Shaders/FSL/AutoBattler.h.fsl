@@ -1,8 +1,6 @@
 #ifndef AUTOBATTLER_H
 #define AUTOBATTLER_H
 
-#include "../Shared.h"
-
 // Layouts must match FrameUniforms in 40_AutoBattler.cpp and UnitInstance/BillboardInstance in AutoBattlerSim.h.
 STRUCT(FrameUniforms)
 {
@@ -13,15 +11,11 @@ STRUCT(FrameUniforms)
     DATA(float4, arena, None);     // x = arena size, y = world z where the enemy half starts
 };
 
-STRUCT(BoneMatrices)
-{
-    DATA(float4x4, boneMatrix[MAX_NUM_BONES], None);
-};
-
 STRUCT(UnitInstance)
 {
     DATA(float4x4, world, None);
     DATA(float4, color, None);
+    DATA(float4, anim, None); // x = first matrix of this unit's frame in gBonePalettes
 };
 
 STRUCT(BillboardInstance)

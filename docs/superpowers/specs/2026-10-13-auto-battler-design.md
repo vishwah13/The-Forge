@@ -12,8 +12,7 @@ What the user asked for: top-down auto battler, existing art only, simple, built
 use the framework's Flecs. Choices made with the user: place-then-watch gameplay, team-tinted
 Stormtroopers, three unit types (Melee, Ranged, Tank), ~2,000 units with squad placement.
 
-Out of scope: shop/bench/merging, sound, locomotion animations (the Stormtrooper only has
-`dance.ozz`), pathfinding/obstacles, non-Windows project files.
+Out of scope: shop/bench/merging, sound, pathfinding/obstacles, non-Windows project files.
 
 ## Where it lives
 
@@ -112,10 +111,14 @@ per-frame GPU buffers. The sim never touches GPU objects.
 ## Rendering
 
 - **Units:** one `cmdDrawIndexedInstanced` of the Stormtrooper mesh. Per-instance structured buffer
-  `{ float4x4 world; float4 tint; }` indexed by instance id; tint = team colour (blue / red) mixed
-  with white by `hitFlash`. One shared joint-matrix buffer for all instances: bind pose during
-  Prep/Battle, the live dance pose (one `AnimatedObject` update per frame) during Result. Only
-  winners are alive in Result, so all of them dance in sync.
+  `{ float4x4 world; float4 color; float4 anim; }`; color = team colour + hit flash, anim.x = the
+  instance's first matrix in a static palette table. Units render at 0.5 scale (the bind pose is 3.7 m).
+- **Animation:** `AnimationBake` samples every clip at 30 fps at startup into skinning palettes:
+  `dance.ozz` on the Stormtrooper rig, and the stickFigure's `stand.ozz` (idle) and `walk.ozz`
+  retargeted onto it (Biped→Mixamo name map; model-space rotation delta from rest pose applied to the
+  target rest pose; target bone lengths; hips keep only the vertical bob). The sim gives each unit a
+  clip (walk when moving, idle in range/prep, dance for the winning side) and its own clock with a
+  per-unit phase offset and speed-scaled walk rate; the app maps (clip, time) to a palette offset.
 - **Ground:** quad with tiled copper albedo, darker tint on the enemy half, grid lines, highlighted
   hover cell in Prep (green = can place, red = cannot).
 - **Health bars:** instanced camera-facing quads above damaged units (green over red).

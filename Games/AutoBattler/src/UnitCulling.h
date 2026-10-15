@@ -5,10 +5,10 @@
 // Per-unit frustum culling. The GPU cull pass (Shaders/FSL/Cull.comp.fsl) runs the same test; this is
 // its reference implementation, checked by the self test and against the GPU's draw count.
 
-// Bounding sphere around the Stormtrooper in model units (bind pose ~3.7 units tall), padded for the
-// arms reaching out while walking and dancing. The instance matrix scales it to world size.
-static const float UNIT_BOUND_CENTER_Y = 1.85f;
-static const float UNIT_BOUND_RADIUS = 2.6f;
+// Bounding sphere around the Paladin in model units (bind pose 1.73 tall, 1.70 arm span), padded for
+// the arms reaching out while attacking and dancing. The instance matrix scales it to world size.
+static const float UNIT_BOUND_CENTER_Y = 0.86f;
+static const float UNIT_BOUND_RADIUS = 1.25f;
 
 // Six inward-facing, normalised planes (xyz normal, w distance) from a column-vector viewProj with
 // D3D clip depth 0..w (either depth direction).

@@ -114,7 +114,15 @@ struct FrameUniforms
 };
 FrameUniforms gFrameUniforms = {};
 
-Rig             gRig; // Stormtrooper skeleton
+// Unit model, imported from Mixamo with Tools/MixamoImport (--name paladin).
+static const char* UNIT_SKELETON = "paladin/skeleton.ozz";
+static const char* UNIT_MESH = "paladin/riggedMesh.bin";
+static const char* UNIT_TEXTURE = "paladin_D.tex";
+// One clip per AnimClip. Walking falls back to idle until a walking.ozz has been imported.
+static const char* UNIT_CLIPS[ANIM_CLIP_COUNT] = { "paladin/animations/neutral_idle.ozz", "paladin/animations/walking.ozz",
+                                                   "paladin/animations/shooting.ozz", "paladin/animations/silly_dancing.ozz" };
+
+Rig             gRig; // unit model skeleton
 BakedAnimations gBaked = {};
 
 BattleSim* pSim = NULL;
@@ -198,7 +206,7 @@ public:
                 gStressMode = true;
         }
 
-        gRig.Initialize(RD_ANIMATIONS, "stormtrooper/skeleton.ozz");
+        gRig.Initialize(RD_ANIMATIONS, UNIT_SKELETON);
 
         RendererDesc settings;
         memset(&settings, 0, sizeof(settings));
@@ -282,7 +290,7 @@ public:
             addResource(&instanceDesc, NULL);
         }
 
-        // Skinned Stormtrooper, same vertex layout as 28_Skinning.
+        // Skinned unit model, same vertex layout as 28_Skinning.
         gUnitVertexLayout.mBindingCount = 1;
         gUnitVertexLayout.mAttribCount = 5;
         gUnitVertexLayout.mAttribs[0].mSemantic = SEMANTIC_POSITION;
@@ -312,7 +320,7 @@ public:
         gUnitVertexLayout.mAttribs[4].mOffset = 7 * sizeof(float) + sizeof(uint32_t) * 2;
 
         GeometryLoadDesc geomDesc = {};
-        geomDesc.pFileName = "stormtrooper/riggedMesh.bin";
+        geomDesc.pFileName = UNIT_MESH;
         geomDesc.pVertexLayout = &gUnitVertexLayout;
         geomDesc.ppGeometry = &pUnitGeom;
         geomDesc.ppGeometryData = &pUnitGeomData;
@@ -321,7 +329,7 @@ public:
 
         TextureLoadDesc textureDesc = {};
         textureDesc.mCreationFlag = TEXTURE_CREATION_FLAG_SRGB;
-        textureDesc.pFileName = "Stormtrooper_D.tex";
+        textureDesc.pFileName = UNIT_TEXTURE;
         textureDesc.ppTexture = &pUnitTexture;
         addResource(&textureDesc, NULL);
         textureDesc.pFileName = "PBR/copper_tiles_01/1K/Albedo.tex";
@@ -374,8 +382,18 @@ ab_zoom; buttonanalog; MOUSE_WHEEL_DOWN; 1.0f; MOUSE_WHEEL_UP; -1.0f)");
         if (!addUnitLods())
             return false;
 
-        // Bake idle/walk (retargeted from the stickFigure) and dance into one static palette table.
-        if (!bakeAnimations(&gRig, pUnitGeomData, &gBaked))
+        // Bake every clip into one static palette table.
+        const char* clips[ANIM_CLIP_COUNT];
+        memcpy(clips, UNIT_CLIPS, sizeof(clips));
+        FileStream walk = {};
+        if (fsOpenStreamFromPath(RD_ANIMATIONS, clips[ANIM_WALK], FM_READ, &walk))
+            fsCloseStream(&walk);
+        else
+        {
+            LOGF(eWARNING, "%s not found; units walk with the idle clip", clips[ANIM_WALK]);
+            clips[ANIM_WALK] = clips[ANIM_IDLE];
+        }
+        if (!bakeAnimations(&gRig, pUnitGeomData, clips, &gBaked))
             return false;
         BufferLoadDesc paletteDesc = {};
         paletteDesc.mDesc.mDescriptors = DESCRIPTOR_TYPE_BUFFER;
@@ -1171,8 +1189,8 @@ ab_zoom; buttonanalog; MOUSE_WHEEL_DOWN; 1.0f; MOUSE_WHEEL_UP; -1.0f)");
     {
         RasterizerStateDesc cullNone = {};
         cullNone.mCullMode = CULL_MODE_NONE;
-        RasterizerStateDesc cullFront = {}; // the Stormtrooper mesh is wound this way, as in 28_Skinning
-        cullFront.mCullMode = CULL_MODE_FRONT;
+        RasterizerStateDesc cullBack = {}; // the unit model is exported from Blender with glTF's counter-clockwise front faces
+        cullBack.mCullMode = CULL_MODE_BACK;
 
         DepthStateDesc depthState = {};
         depthState.mDepthTest = true;
@@ -1202,7 +1220,7 @@ ab_zoom; buttonanalog; MOUSE_WHEEL_DOWN; 1.0f; MOUSE_WHEEL_UP; -1.0f)");
         PipelineDesc unitDesc = desc;
         PIPELINE_LAYOUT_DESC(unitDesc, SRT_LAYOUT_DESC(SrtData, Persistent), SRT_LAYOUT_DESC(SrtData, PerFrame),
                              SRT_LAYOUT_DESC(SrtData, PerBatch), NULL);
-        unitDesc.mGraphicsDesc.pRasterizerState = &cullFront;
+        unitDesc.mGraphicsDesc.pRasterizerState = &cullBack;
         unitDesc.mGraphicsDesc.pVertexLayout = &gUnitVertexLayout;
         unitDesc.mGraphicsDesc.pShaderProgram = pUnitShader;
         addPipeline(pRenderer, &unitDesc, &pUnitPipeline);

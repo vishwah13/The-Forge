@@ -18,7 +18,7 @@ const UnitStats gUnitStats[UNIT_TYPE_COUNT] = {
 
 static const float   RETARGET_INTERVAL = 0.25f;
 static const float   SEPARATION_SPEED = 4.0f;
-static const float   WALK_ANIM_SPEED = 2.0f; // unit speed at which the walk clip plays at 1x
+static const float   WALK_ANIM_SPEED = 1.72f; // ground speed of the walk clip at 1x for a model of scale 1 (measured foot speed)
 static const float   GRID_BUCKET_SIZE = 2.0f;
 static const float   STRESS_SPACING = 1.0f; // same as a melee squad on the board
 static const float   STRESS_GAP = 10.0f;    // between the two armies' front rows
@@ -41,6 +41,7 @@ struct Unit
     float    yaw;
     float    animTime; // animation clock, offset per unit so crowds are not in lockstep
     uint32_t moving;   // walked this frame (drives the walk vs idle clip)
+    uint32_t attacking; // in range of its target this frame (drives the attack clip)
 };
 
 struct Health
@@ -179,7 +180,7 @@ static void spawnUnit(BattleSim* p, Team team, UnitType type, float x, float z, 
 
     const Position pos = { x, z };
     const Unit     unit = { (uint8_t)team, (uint8_t)type, cell, UNIT_RADIUS * stats.mScale, team == TEAM_PLAYER ? 0.0f : PI,
-                            (float)(p->mSpawnCounter % 97u) * 0.37f, 0u };
+                            (float)(p->mSpawnCounter % 97u) * 0.37f, 0u, 0u };
     const Health   health = { stats.mHp, stats.mHp, 0.0f };
     // Stagger retargeting so only a slice of the army searches each frame.
     const Attack   attack = { 0, 0.0f, RETARGET_INTERVAL * (float)(p->mSpawnCounter++ % 16u) / 16.0f, 0u };
@@ -520,7 +521,9 @@ static void SteerSystem(ecs_iter_t* it)
         vz += sz * SEPARATION_SPEED;
 
         unit[i].moving = (vx != 0.0f || vz != 0.0f) && !a.inRange ? 1u : 0u;
-        unit[i].animTime += unit[i].moving ? dt * stats.mSpeed / WALK_ANIM_SPEED : dt;
+        unit[i].attacking = a.inRange;
+        // Bigger units cover more ground per step, so the walk plays slower for the same speed.
+        unit[i].animTime += unit[i].moving ? dt * stats.mSpeed / (WALK_ANIM_SPEED * UNIT_MODEL_SCALE * stats.mScale) : dt;
 
         const float r = unit[i].radius;
         pos[i].x = clampf(pos[i].x + vx * dt, r, p->mWorldSize - r);
@@ -806,6 +809,7 @@ static void advanceAnimationClocks(BattleSim* p, float dt)
         for (int32_t i = 0; i < it.count; ++i)
         {
             unit[i].moving = 0u;
+            unit[i].attacking = 0u;
             unit[i].animTime += dt;
         }
     }
@@ -943,7 +947,7 @@ float simGetWorldSize(const BattleSim* p) { return p->mWorldSize; }
 // Render data
 //--------------------------------------------------------------------------------------------
 static const float3 TEAM_COLORS[TEAM_COUNT] = { float3(0.30f, 0.55f, 1.00f), float3(1.00f, 0.30f, 0.25f) };
-static const float  HEALTH_BAR_HEIGHT = 4.2f; // model units, above the 3.7-unit-tall bind pose
+static const float  HEALTH_BAR_HEIGHT = 2.0f; // model units, above the 1.73-unit-tall bind pose
 
 void simFillRenderData(BattleSim* p, RenderData* pOut)
 {
@@ -966,7 +970,7 @@ void simFillRenderData(BattleSim* p, RenderData* pOut)
             instance.mColor = float4(color.x, color.y, color.z, health[i].hitFlash > 0.0f ? health[i].hitFlash : 0.0f);
             const bool winner = (p->mPhase == PHASE_VICTORY && unit[i].team == TEAM_PLAYER) ||
                                 (p->mPhase == PHASE_DEFEAT && unit[i].team == TEAM_ENEMY);
-            const AnimClip clip = winner ? ANIM_DANCE : (unit[i].moving ? ANIM_WALK : ANIM_IDLE);
+            const AnimClip clip = winner ? ANIM_DANCE : (unit[i].moving ? ANIM_WALK : (unit[i].attacking ? ANIM_ATTACK : ANIM_IDLE));
             instance.mAnim = float4((float)clip, unit[i].animTime, 0.0f, 0.0f);
 
             if (health[i].hp < health[i].maxHp)

@@ -387,7 +387,7 @@ static void testRenderDataPrep(TestContext* pCtx)
     CHECK(noFlash);
     CHECK(blue == 25u);
 
-    // Units render at UNIT_MODEL_SCALE x their type scale (the mesh's bind pose is ~3.7 m tall).
+    // Units render at UNIT_MODEL_SCALE x their type scale.
     bool scaled = true;
     for (uint32_t i = 0; i < data.mUnitCount; ++i)
     {
@@ -477,6 +477,18 @@ static void testAnimationState(TestContext* pCtx)
     simFillRenderData(s, &data);
     CHECK(countClip(data, ANIM_DANCE, true) == 0u);
     CHECK(countClip(data, ANIM_DANCE, false) == 9u);
+    simDestroy(s);
+
+    // Units in range of their target play the attack clip; the one unit out of range walks.
+    s = simCreate(1);
+    simTestClearBoard(s);
+    simTestSetCell(s, 0, 0, UNIT_MELEE);              // 5 x 5 player squad, z 0.5 .. 4.5
+    simTestSpawnUnit(s, TEAM_ENEMY, UNIT_TANK, 2.5f, 5.5f); // touching the squad's front row
+    CHECK(simStartBattle(s));
+    stepFor(s, 0.2f);
+    simFillRenderData(s, &data);
+    CHECK(countClip(data, ANIM_ATTACK, false) >= 2u); // the tank and at least one front-row unit
+    CHECK(countClip(data, ANIM_WALK, false) > 0u);    // back rows close in
     freeRenderData(&data);
     simDestroy(s);
 }
@@ -553,8 +565,8 @@ static void testUnitCulling(TestContext* pCtx)
     float4      planes[6];
     frustumPlanesFromViewProj(proj * view, planes);
 
-    const float s = 0.5f;                     // melee instance scale
-    const float r = UNIT_BOUND_RADIUS * s;    // 1.3 m world radius
+    const float s = UNIT_MODEL_SCALE * gUnitStats[UNIT_MELEE].mScale; // melee instance scale
+    const float r = UNIT_BOUND_RADIUS * s;                            // world radius
     const float edgeX = 50.0f * tanHalfX;     // right edge at z = 0
     const float edgeY = edgeX * aspectInverse; // top edge at z = 0
     const float c30 = cosf(PI / 6.0f);        // a sphere at edge + o is o * c30 from the side plane
@@ -573,7 +585,7 @@ static void testUnitCulling(TestContext* pCtx)
     // off at 2 km (the GPU clips with the same matrix), so these two use wider margins.
     CHECK(unitInFrustum(planes, unitAt(0.0f, 0.0f, -50.0f + zFar + 0.3f, s)));           // straddles the far plane
     CHECK(!unitInFrustum(planes, unitAt(0.0f, 0.0f, -50.0f + zFar + 3.0f, s)));          // beyond it
-    CHECK(unitInFrustum(planes, unitAt(edgeX + 2.0f, 0.0f, 0.0f, 1.0f)));               // a bigger unit still reaches in
+    CHECK(unitInFrustum(planes, unitAt(edgeX + 2.0f, 0.0f, 0.0f, 2.0f * s)));          // a bigger unit still reaches in
 }
 
 static void testUnitLodSelection(TestContext* pCtx)

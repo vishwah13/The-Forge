@@ -5,10 +5,9 @@
 class Rig;
 struct GeometryData;
 
-// Every animation the Stormtrooper can play, pre-sampled into skinning palettes (one mat4 per mesh
-// joint per frame) so each instance can pick its own frame on the GPU.
-//   ANIM_DANCE: the Stormtrooper's own dance.ozz.
-//   ANIM_IDLE / ANIM_WALK: the stickFigure's stand.ozz / walk.ozz, retargeted onto the Stormtrooper.
+// Every animation the unit model can play, pre-sampled into skinning palettes (one mat4 per mesh
+// joint per frame) so each instance can pick its own frame on the GPU. The clips are authored for the
+// model's own skeleton (see Tools/MixamoImport), so they are sampled as they are.
 struct BakedClip
 {
     uint32_t mFirstFrame;
@@ -23,8 +22,9 @@ struct BakedAnimations
     BakedClip mClips[ANIM_CLIP_COUNT];
 };
 
-// pTargetRig: the Stormtrooper skeleton; pGeom: its mesh data (joint remaps, inverse bind poses).
-bool bakeAnimations(Rig* pTargetRig, const GeometryData* pGeom, BakedAnimations* pOut);
+// pRig: the model's skeleton; pGeom: its mesh data (joint remaps, inverse bind poses);
+// pClipFiles: one .ozz per AnimClip under RD_ANIMATIONS.
+bool bakeAnimations(Rig* pRig, const GeometryData* pGeom, const char* const pClipFiles[ANIM_CLIP_COUNT], BakedAnimations* pOut);
 void freeBakedAnimations(BakedAnimations* pBaked);
 
 // Index of the first palette matrix for `clip` at `time` seconds (looping).

@@ -3,15 +3,15 @@
 #include <math.h>
 #include <string.h>
 
-#include "../../../../Common_3/Resources/AnimationSystem/Animation/AnimatedObject.h"
-#include "../../../../Common_3/Resources/AnimationSystem/Animation/Animation.h"
-#include "../../../../Common_3/Resources/AnimationSystem/Animation/Clip.h"
-#include "../../../../Common_3/Resources/AnimationSystem/Animation/ClipController.h"
-#include "../../../../Common_3/Resources/AnimationSystem/Animation/Rig.h"
-#include "../../../../Common_3/Resources/ResourceLoader/Interfaces/IResourceLoader.h"
-#include "../../../../Common_3/Utilities/Interfaces/ILog.h"
+#include "../../../Common_3/Resources/AnimationSystem/Animation/AnimatedObject.h"
+#include "../../../Common_3/Resources/AnimationSystem/Animation/Animation.h"
+#include "../../../Common_3/Resources/AnimationSystem/Animation/Clip.h"
+#include "../../../Common_3/Resources/AnimationSystem/Animation/ClipController.h"
+#include "../../../Common_3/Resources/AnimationSystem/Animation/Rig.h"
+#include "../../../Common_3/Resources/ResourceLoader/Interfaces/IResourceLoader.h"
+#include "../../../Common_3/Utilities/Interfaces/ILog.h"
 
-#include "../../../../Common_3/Utilities/Interfaces/IMemory.h"
+#include "../../../Common_3/Utilities/Interfaces/IMemory.h"
 
 static const float BAKE_FPS = 30.0f;
 

@@ -1,5 +1,6 @@
-#include "../../../../../../Common_3/Graphics/ShaderUtilities.h.fsl"
+#include "../../../../../Common_3/Graphics/ShaderUtilities.h.fsl"
 #include "AutoBattler.h.fsl"
+#include "Global.srt.h"
 
 STRUCT(VSInput)
 {
@@ -24,19 +25,26 @@ VSOutput VS_MAIN(VSInput In, SV_InstanceID(uint) instanceId)
     INIT_MAIN;
     VSOutput Out;
 
-    // Each unit samples its own frame of the baked animation table.
-    uint     palette = uint(gUnitInstances[instanceId].anim.x);
+    // Instances are the units that passed culling; each samples its own frame of the baked animation table.
+    uint     entry = gVisibleUnits[instanceId];
+    uint     unit = entry & ((1u << VISIBLE_LOD_SHIFT) - 1u);
+    uint     palette = uint(gUnitInstances[unit].anim.x);
     float4x4 boneTransform = gBonePalettes[palette + In.BoneIndices[0]] * In.BoneWeights[0];
     boneTransform += gBonePalettes[palette + In.BoneIndices[1]] * In.BoneWeights[1];
     boneTransform += gBonePalettes[palette + In.BoneIndices[2]] * In.BoneWeights[2];
     boneTransform += gBonePalettes[palette + In.BoneIndices[3]] * In.BoneWeights[3];
 
-    float4x4 world = gUnitInstances[instanceId].world;
+    float4x4 world = gUnitInstances[unit].world;
     float4   worldPos = mul(world, mul(boneTransform, float4(In.Position, 1.0f)));
     Out.Position = mul(gFrame.viewProj, worldPos);
     float3 normal = decodeDir(unpackUnorm2x16(In.Normal));
     Out.Normal = normalize(mul(world, mul(boneTransform, float4(normal, 0.0f))).xyz);
     Out.UV = unpack2Floats(In.UV);
-    Out.Color = gUnitInstances[instanceId].color;
+    Out.Color = gUnitInstances[unit].color;
+    if ((gFrame.debugFlags & DEBUG_LOD_COLORS) != 0)
+    {
+        uint lod = entry >> VISIBLE_LOD_SHIFT;
+        Out.Color.rgb = lod == 0 ? float3(0.2f, 1.0f, 0.2f) : (lod == 1 ? float3(1.0f, 0.9f, 0.1f) : float3(1.0f, 0.15f, 0.1f));
+    }
     RETURN(Out);
 }

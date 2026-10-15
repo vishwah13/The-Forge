@@ -78,7 +78,7 @@
     </Link>
     <Manifest>
       <OutputManifestFile>$(IntDir)$(TargetName)$(TargetExt).embed.manifest</OutputManifestFile>
-      <AdditionalManifestFiles>$(SolutionDir)dpi-aware.manifest %(AdditionalManifestFiles)</AdditionalManifestFiles>
+      <AdditionalManifestFiles>$(TheForgeRoot)Examples_3\Unit_Tests\PC_VS2019\dpi-aware.manifest %(AdditionalManifestFiles)</AdditionalManifestFiles>
     </Manifest>
     <ManifestResourceCompile>
       <ResourceOutputFileName>$(IntDir)$(TargetName)$(TargetExt).embed.manifest.res</ResourceOutputFileName>
@@ -123,7 +123,7 @@
       <AdditionalOptions>/ignore:4099</AdditionalOptions>
     </Link>
     <Manifest>
-      <AdditionalManifestFiles>$(SolutionDir)dpi-aware.manifest %(AdditionalManifestFiles)</AdditionalManifestFiles>
+      <AdditionalManifestFiles>$(TheForgeRoot)Examples_3\Unit_Tests\PC_VS2019\dpi-aware.manifest %(AdditionalManifestFiles)</AdditionalManifestFiles>
     </Manifest>
     <PostBuildEvent>
       <Command>
@@ -138,30 +138,40 @@
     </FSLShader>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClCompile Include="..\src\40_AutoBattler\40_AutoBattler.cpp" />
-    <ClCompile Include="..\src\40_AutoBattler\AutoBattlerSim.cpp" />
-    <ClCompile Include="..\src\40_AutoBattler\AutoBattlerSelfTest.cpp" />
-    <ClCompile Include="..\src\40_AutoBattler\AnimationBake.cpp" />
+    <ClCompile Include="..\src\AutoBattler.cpp" />
+    <ClCompile Include="..\src\AutoBattlerSim.cpp" />
+    <ClCompile Include="..\src\AutoBattlerSelfTest.cpp" />
+    <ClCompile Include="..\src\AnimationBake.cpp" />
+    <ClCompile Include="..\src\UnitLod.cpp" />
+    <ClCompile Include="..\..\..\Common_3\Tools\ThirdParty\OpenSource\meshoptimizer\src\allocator.cpp" />
+    <ClCompile Include="..\..\..\Common_3\Tools\ThirdParty\OpenSource\meshoptimizer\src\simplifier.cpp" />
+    <ClCompile Include="..\..\..\Common_3\Tools\ThirdParty\OpenSource\meshoptimizer\src\vcacheoptimizer.cpp" />
     <ClCompile Include="..\..\..\Common_3\Game\ThirdParty\OpenSource\flecs\flecs.c" />
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="..\src\40_AutoBattler\AutoBattlerSim.h" />
-    <ClInclude Include="..\src\40_AutoBattler\AnimationBake.h" />
-    <ClInclude Include="..\src\40_AutoBattler\Shaders\FSL\Global.srt.h" />
+    <ClInclude Include="..\src\AutoBattlerSim.h" />
+    <ClInclude Include="..\src\AnimationBake.h" />
+    <ClInclude Include="..\src\UnitCulling.h" />
+    <ClInclude Include="..\src\UnitLod.h" />
+    <ClInclude Include="..\src\Shaders\FSL\Global.srt.h" />
+    <ClInclude Include="..\src\Shaders\FSL\Cull.srt.h" />
+    <ClInclude Include="..\src\Shaders\FSL\SharedSets.h" />
     <ClInclude Include="..\..\..\Common_3\Game\ThirdParty\OpenSource\flecs\flecs.h" />
   </ItemGroup>
   <ItemGroup>
-    <None Include="..\src\40_AutoBattler\GPUCfg\gpu.cfg" />
+    <None Include="..\src\GPUCfg\gpu.cfg" />
   </ItemGroup>
   <ItemGroup>
-    <FSLShader Include="..\src\40_AutoBattler\Shaders\FSL\AutoBattler.h.fsl" />
-    <FSLShader Include="..\src\40_AutoBattler\Shaders\FSL\Billboard.frag.fsl" />
-    <FSLShader Include="..\src\40_AutoBattler\Shaders\FSL\Billboard.vert.fsl" />
-    <FSLShader Include="..\src\40_AutoBattler\Shaders\FSL\Ground.frag.fsl" />
-    <FSLShader Include="..\src\40_AutoBattler\Shaders\FSL\Ground.vert.fsl" />
-    <FSLShader Include="..\src\40_AutoBattler\Shaders\FSL\Shaders.list" />
-    <FSLShader Include="..\src\40_AutoBattler\Shaders\FSL\Unit.frag.fsl" />
-    <FSLShader Include="..\src\40_AutoBattler\Shaders\FSL\Unit.vert.fsl" />
+    <FSLShader Include="..\src\Shaders\FSL\AutoBattler.h.fsl" />
+    <FSLShader Include="..\src\Shaders\FSL\Billboard.frag.fsl" />
+    <FSLShader Include="..\src\Shaders\FSL\Billboard.vert.fsl" />
+    <FSLShader Include="..\src\Shaders\FSL\Cull.comp.fsl" />
+    <FSLShader Include="..\src\Shaders\FSL\CullClear.comp.fsl" />
+    <FSLShader Include="..\src\Shaders\FSL\Ground.frag.fsl" />
+    <FSLShader Include="..\src\Shaders\FSL\Ground.vert.fsl" />
+    <FSLShader Include="..\src\Shaders\FSL\Shaders.list" />
+    <FSLShader Include="..\src\Shaders\FSL\Unit.frag.fsl" />
+    <FSLShader Include="..\src\Shaders\FSL\Unit.vert.fsl" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

@@ -1,0 +1,44 @@
+#ifndef AUTOBATTLER_H
+#define AUTOBATTLER_H
+
+// Layouts must match FrameUniforms in AutoBattler.cpp and UnitInstance/BillboardInstance in AutoBattlerSim.h.
+STRUCT(FrameUniforms)
+{
+    DATA(float4x4, viewProj, None);
+    DATA(float4, camRight, None);  // xyz camera right
+    DATA(float4, camUp, None);     // xyz camera up
+    DATA(float4, hoverCell, None); // x, z = cell; y = 0 none, 1 can place, 2 cannot; w = cell size
+    DATA(float4, arena, None);     // x = arena size, y = world z where the enemy half starts
+    DATA(float4, cullPlanes[6], None); // inward frustum planes for the cull pass
+    DATA(float4, unitBounds, None);    // x = bounding sphere centre height, y = radius (model units),
+                                       // z, w = camera distance in radii where LOD1 and LOD2 start
+    DATA(float4, cameraPos, None);     // xyz
+    DATA(uint, unitCount, None);       // units in gUnitInstances
+    DATA(uint, unitCapacity, None);    // length of each LOD's visible list
+    DATA(uint, debugFlags, None);      // DEBUG_* bits
+    DATA(uint, pad0, None);
+    DATA(uint4, lodFirstIndex, None);  // per LOD, into the LOD index buffer
+    DATA(uint4, lodIndexCount, None);
+};
+
+STRUCT(UnitInstance)
+{
+    DATA(float4x4, world, None);
+    DATA(float4, color, None);
+    DATA(float4, anim, None); // x = first matrix of this unit's frame in gBonePalettes
+};
+
+STRUCT(BillboardInstance)
+{
+    DATA(float4, centerHalfWidth, None);
+    DATA(float4, fullColorFill, None);
+    DATA(float4, emptyColorHalfHeight, None);
+};
+
+#define CULL_GROUP_SIZE 64 // must match the dispatch in AutoBattler.cpp
+#define UNIT_LOD_COUNT  3  // must match UnitLod.h
+#define DRAW_ARG_STRIDE 5  // uints per indexed indirect draw
+#define VISIBLE_LOD_SHIFT 30 // visible list entries are unit | lod << VISIBLE_LOD_SHIFT
+#define DEBUG_LOD_COLORS 1   // must match AutoBattler.cpp: tint units green / yellow / red by LOD
+
+#endif

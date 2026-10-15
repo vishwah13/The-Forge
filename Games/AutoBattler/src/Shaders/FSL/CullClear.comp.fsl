@@ -1,0 +1,20 @@
+#include "AutoBattler.h.fsl"
+#include "Cull.srt.h"
+
+// Resets each LOD's draw before culling: that level's index range, zero instances.
+ROOT_SIGNATURE(ComputeRootSignature)
+NUM_THREADS(1, 1, 1)
+void CS_MAIN(SV_DispatchThreadID(uint3) threadId)
+{
+    INIT_MAIN;
+    for (uint lod = 0; lod < UNIT_LOD_COUNT; ++lod)
+    {
+        uint args = lod * DRAW_ARG_STRIDE;
+        gUnitDrawArgsRW[args + 0] = gFrame.lodIndexCount[lod]; // index count
+        gUnitDrawArgsRW[args + 1] = 0;                         // instance count, bumped per visible unit
+        gUnitDrawArgsRW[args + 2] = gFrame.lodFirstIndex[lod]; // first index
+        gUnitDrawArgsRW[args + 3] = 0;                         // vertex offset
+        gUnitDrawArgsRW[args + 4] = 0;                         // first instance
+    }
+    RETURN();
+}

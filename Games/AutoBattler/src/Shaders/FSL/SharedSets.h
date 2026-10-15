@@ -1,7 +1,5 @@
-#pragma once
-
-// for low end iOS devices, do not use Argument buffers
-BEGIN_SRT_NO_AB(SrtData)
+// Persistent and PerFrame sets shared by the graphics SRT (Global.srt.h) and the cull SRT (Cull.srt.h),
+// so one pair of descriptor sets serves both. Included inside BEGIN_SRT, so no include guard.
     BEGIN_SRT_SET(Persistent)
         DECL_TEXTURE(Persistent, Tex2D(float4), gUnitTexture)
         DECL_TEXTURE(Persistent, Tex2D(float4), gGroundTexture)
@@ -12,4 +10,3 @@ BEGIN_SRT_NO_AB(SrtData)
         DECL_BUFFER(PerFrame, Buffer(UnitInstance), gUnitInstances)
         DECL_BUFFER(PerFrame, Buffer(BillboardInstance), gBillboards)
     END_SRT_SET(PerFrame)
-END_SRT(SrtData)

@@ -1,8 +1,8 @@
 #pragma once
 
-#include "../../../../Common_3/Utilities/Math/MathTypes.h"
+#include "../../../Common_3/Utilities/Math/MathTypes.h"
 
-// Gameplay simulation for 40_AutoBattler, built on Flecs. Has no graphics dependencies so the self
+// Gameplay simulation for AutoBattler, built on Flecs. Has no graphics dependencies so the self
 // test can drive it without a renderer. Only one BattleSim may exist at a time: Flecs component ids
 // are file-scope globals that are re-registered for each world.
 
@@ -93,7 +93,8 @@ struct RenderData
 
 struct BattleSim;
 
-BattleSim* simCreate(uint32_t threadCount);
+// unitCapacity sizes unit storage; the game itself never exceeds MAX_UNITS, only stress runs use more.
+BattleSim* simCreate(uint32_t threadCount, uint32_t unitCapacity = MAX_UNITS);
 void       simDestroy(BattleSim* pSim);
 
 // Round 1, START_GOLD, empty player board, fresh enemy wave, PHASE_PREP.
@@ -101,6 +102,11 @@ void simRestart(BattleSim* pSim);
 
 // PREP with at least one player squad -> BATTLE. Otherwise refused (see simGetMessage()).
 bool simStartBattle(BattleSim* pSim);
+
+// Stress run: replaces everything with two facing armies of unitsPerTeam at normal (1 m) spacing on a
+// world sized to hold them, and starts the battle. Refused if both armies exceed the unit capacity.
+// simRestart() returns to the normal ARENA_SIZE game.
+bool simStressSetup(BattleSim* pSim, uint32_t unitsPerTeam);
 
 // Advances the battle or result timer. Ignores NaN/non-positive steps and clamps to MAX_STEP.
 void simStep(BattleSim* pSim, float deltaTime);
@@ -118,9 +124,14 @@ uint32_t    simGetUnitCount(BattleSim* pSim, Team team);
 float       simGetBattleTime(const BattleSim* pSim);
 uint32_t    simGetProjectileCount(const BattleSim* pSim);
 const char* simGetMessage(const BattleSim* pSim);
+uint32_t    simGetUnitCapacity(const BattleSim* pSim);
+float       simGetWorldSize(const BattleSim* pSim); // ARENA_SIZE except during stress runs
 
 // Writes one UnitInstance per unit, a health bar per damaged unit and a billboard per projectile.
+// pOut needs room for simGetUnitCapacity() units and simGetUnitCapacity() + MAX_PROJECTILES billboards.
 void simFillRenderData(BattleSim* pSim, RenderData* pOut);
+
+inline float clampf(float v, float lo, float hi) { return v < lo ? lo : (v > hi ? hi : v); }
 
 // Pure helpers, also used by the app's mouse picking.
 bool   worldToCell(float x, float z, int32_t* pCellX, int32_t* pCellZ);
@@ -136,6 +147,16 @@ void  simTestSetBattleTime(BattleSim* pSim, float seconds);
 float simTestTotalHp(BattleSim* pSim, Team team);
 bool  simTestAllPositionsFinite(BattleSim* pSim);
 float simTestMinUnitDistance(BattleSim* pSim, Team team);
+
+// Runs the nearest-enemy search for every unit on a fresh grid and checks each result against a
+// brute-force search (same distance; ties may pick a different unit).
+struct SimSearchStats
+{
+    uint32_t mSearches;
+    uint32_t mMismatches;
+    float    mAverageBucketsVisited;
+};
+SimSearchStats simTestNearestEnemySearch(BattleSim* pSim);
 
 // Runs the headless simulation tests, writes a report next to the log, returns the failure count.
 int runAutoBattlerSelfTest(const char* pResultFileName);

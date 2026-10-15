@@ -1,0 +1,30 @@
+#include "AutoBattler.h.fsl"
+#include "Cull.srt.h"
+
+// One thread per unit: appends each unit whose bounding sphere touches the view frustum to the visible
+// list of its level of detail and counts it in that level's indirect draw. Mirrors unitLod() in UnitCulling.h.
+ROOT_SIGNATURE(ComputeRootSignature)
+NUM_THREADS(CULL_GROUP_SIZE, 1, 1)
+void CS_MAIN(SV_DispatchThreadID(uint3) threadId)
+{
+    INIT_MAIN;
+    uint unit = threadId.x;
+    if (unit < gFrame.unitCount)
+    {
+        float4x4 world = gUnitInstances[unit].world;
+        float3   center = mul(world, float4(0.0f, gFrame.unitBounds.x, 0.0f, 1.0f)).xyz;
+        float    radius = gFrame.unitBounds.y * length(mul(world, float4(1.0f, 0.0f, 0.0f, 0.0f)).xyz);
+        bool     visible = true;
+        for (uint i = 0; i < 6; ++i)
+            visible = visible && dot(gFrame.cullPlanes[i].xyz, center) + gFrame.cullPlanes[i].w >= -radius;
+        if (visible)
+        {
+            float distance = length(center - gFrame.cameraPos.xyz) / radius;
+            uint  lod = distance >= gFrame.unitBounds.w ? 2 : (distance >= gFrame.unitBounds.z ? 1 : 0);
+            uint  slot;
+            AtomicAdd(gUnitDrawArgsRW[lod * DRAW_ARG_STRIDE + 1], 1, slot);
+            gVisibleUnitsRW[lod * gFrame.unitCapacity + slot] = unit | (lod << VISIBLE_LOD_SHIFT);
+        }
+    }
+    RETURN();
+}

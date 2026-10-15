@@ -4,10 +4,10 @@
 #include <math.h>
 #include <string.h>
 
-#include "../../../../Common_3/Game/ThirdParty/OpenSource/flecs/flecs.h"
-#include "../../../../Common_3/Utilities/Interfaces/ILog.h"
+#include "../../../Common_3/Game/ThirdParty/OpenSource/flecs/flecs.h"
+#include "../../../Common_3/Utilities/Interfaces/ILog.h"
 
-#include "../../../../Common_3/Utilities/Interfaces/IMemory.h"
+#include "../../../Common_3/Utilities/Interfaces/IMemory.h"
 
 const UnitStats gUnitStats[UNIT_TYPE_COUNT] = {
     // name     side cost  hp      damage cooldown range speed scale
@@ -20,7 +20,9 @@ static const float   RETARGET_INTERVAL = 0.25f;
 static const float   SEPARATION_SPEED = 4.0f;
 static const float   WALK_ANIM_SPEED = 2.0f; // unit speed at which the walk clip plays at 1x
 static const float   GRID_BUCKET_SIZE = 2.0f;
-static const int32_t GRID_DIM = (int32_t)(ARENA_SIZE / GRID_BUCKET_SIZE);
+static const float   STRESS_SPACING = 1.0f; // same as a melee squad on the board
+static const float   STRESS_GAP = 10.0f;    // between the two armies' front rows
+static const float   STRESS_MARGIN = 5.0f;  // between the armies and the world edge
 
 //--------------------------------------------------------------------------------------------
 // Components
@@ -89,12 +91,18 @@ struct GridEntry
 // from here, so the multithreaded steering system never reads data another thread is writing.
 struct SpatialGrid
 {
-    GridEntry* pEntries;      // MAX_UNITS, sorted by bucket
-    GridEntry* pScratch;      // MAX_UNITS, query order
-    uint32_t*  pBucketStart;  // GRID_DIM * GRID_DIM + 1
-    uint32_t*  pBucketCursor; // GRID_DIM * GRID_DIM
+    GridEntry* pEntries;      // unit capacity, sorted by bucket
+    GridEntry* pScratch;      // unit capacity, query order
+    uint32_t*  pBucketStart;  // mDim * mDim + 1
+    uint32_t*  pBucketCursor; // mDim * mDim
+    // Per team and bucket: rings out (Chebyshev distance in buckets) to the nearest bucket holding a
+    // unit of another team, NO_ENEMY if there is none. Lets the nearest-enemy search skip empty rings.
+    uint16_t*  pEnemyRings[TEAM_COUNT];
     uint32_t   mCount;
+    int32_t    mDim; // buckets per side, covers the world
 };
+
+static const uint16_t NO_ENEMY = 0xFFFF;
 
 struct BattleSim
 {
@@ -110,6 +118,8 @@ struct BattleSim
     uint32_t     mProjectileCount;
     uint32_t     mSpawnCounter;
     const char*  pMessage;
+    uint32_t     mUnitCapacity;
+    float        mWorldSize; // ARENA_SIZE, or larger during a stress run
     SpatialGrid  mGrid;
 };
 
@@ -193,9 +203,16 @@ static void spawnSquad(BattleSim* p, int32_t cellX, int32_t cellZ, UnitType type
                       (float)cellZ * CELL_SIZE + ((float)j + 0.5f) * spacing, (uint16_t)cellIndex(cellX, cellZ));
 }
 
-// Units on the field always mirror the board while not in battle.
+static void setWorldSize(BattleSim* p, float worldSize)
+{
+    p->mWorldSize = worldSize;
+    p->mGrid.mDim = (int32_t)ceilf(worldSize / GRID_BUCKET_SIZE);
+}
+
+// Units on the field always mirror the board while not in battle, and the board game is played on the arena.
 static void rebuildFromBoard(BattleSim* p)
 {
+    setWorldSize(p, ARENA_SIZE);
     ecs_delete_with(p->pWorld, ecs_id(Unit));
     ecs_delete_with(p->pWorld, ecs_id(Projectile));
     p->mProjectileCount = 0;
@@ -245,15 +262,54 @@ static void generateWave(BattleSim* p)
 //--------------------------------------------------------------------------------------------
 // Spatial grid
 //--------------------------------------------------------------------------------------------
-static float clampf(float v, float lo, float hi) { return v < lo ? lo : (v > hi ? hi : v); }
-
-static int32_t bucketCoord(float v)
+static int32_t bucketCoord(const SpatialGrid& g, float v)
 {
     const int32_t b = (int32_t)(v / GRID_BUCKET_SIZE);
-    return b < 0 ? 0 : (b >= GRID_DIM ? GRID_DIM - 1 : b);
+    return b < 0 ? 0 : (b >= g.mDim ? g.mDim - 1 : b);
 }
 
-static uint32_t bucketOf(float x, float z) { return (uint32_t)(bucketCoord(z) * GRID_DIM + bucketCoord(x)); }
+static uint32_t bucketOf(const SpatialGrid& g, float x, float z) { return (uint32_t)(bucketCoord(g, z) * g.mDim + bucketCoord(g, x)); }
+
+// Two-pass distance transform with unit-cost 8-neighbour steps: exact Chebyshev distance.
+static void buildEnemyRings(SpatialGrid& g)
+{
+    const int32_t  dim = g.mDim;
+    const uint32_t bucketCount = (uint32_t)(dim * dim);
+    for (uint32_t team = 0; team < TEAM_COUNT; ++team)
+    {
+        uint16_t* d = g.pEnemyRings[team];
+        for (uint32_t b = 0; b < bucketCount; ++b)
+        {
+            d[b] = NO_ENEMY;
+            for (uint32_t s = g.pBucketStart[b]; s < g.pBucketStart[b + 1]; ++s)
+                if (g.pEntries[s].mTeam != team)
+                {
+                    d[b] = 0;
+                    break;
+                }
+        }
+        // Forward pass takes the already-visited neighbours (left and the row above), the backward pass the rest.
+        for (int32_t pass = 0; pass < 2; ++pass)
+        {
+            const int32_t step = pass == 0 ? 1 : -1;
+            const int32_t first = pass == 0 ? 0 : dim - 1;
+            for (int32_t z = first; z >= 0 && z < dim; z += step)
+                for (int32_t x = first; x >= 0 && x < dim; x += step)
+                {
+                    uint32_t      best = d[z * dim + x];
+                    const int32_t neighbours[4][2] = { { x - step, z }, { x - step, z - step }, { x, z - step }, { x + step, z - step } };
+                    for (int32_t n = 0; n < 4; ++n)
+                    {
+                        const int32_t nx = neighbours[n][0];
+                        const int32_t nz = neighbours[n][1];
+                        if (nx >= 0 && nx < dim && nz >= 0 && nz < dim && d[nz * dim + nx] != NO_ENEMY && d[nz * dim + nx] + 1u < best)
+                            best = d[nz * dim + nx] + 1u;
+                    }
+                    d[z * dim + x] = (uint16_t)best;
+                }
+        }
+    }
+}
 
 static void buildGrid(BattleSim* p)
 {
@@ -266,7 +322,7 @@ static void buildGrid(BattleSim* p)
         const Unit*     unit = ecs_field(&it, Unit, 1);
         for (int32_t i = 0; i < it.count; ++i)
         {
-            ASSERT(g.mCount < MAX_UNITS);
+            ASSERT(g.mCount < p->mUnitCapacity);
             GridEntry& e = g.pScratch[g.mCount++];
             e.mEntity = it.entities[i];
             e.mX = pos[i].x;
@@ -276,18 +332,20 @@ static void buildGrid(BattleSim* p)
         }
     }
 
-    const uint32_t bucketCount = (uint32_t)(GRID_DIM * GRID_DIM);
+    const uint32_t bucketCount = (uint32_t)(g.mDim * g.mDim);
     memset(g.pBucketStart, 0, sizeof(uint32_t) * (bucketCount + 1));
     for (uint32_t i = 0; i < g.mCount; ++i)
-        ++g.pBucketStart[bucketOf(g.pScratch[i].mX, g.pScratch[i].mZ) + 1];
+        ++g.pBucketStart[bucketOf(g, g.pScratch[i].mX, g.pScratch[i].mZ) + 1];
     for (uint32_t b = 0; b < bucketCount; ++b)
         g.pBucketStart[b + 1] += g.pBucketStart[b];
     memcpy(g.pBucketCursor, g.pBucketStart, sizeof(uint32_t) * bucketCount);
     for (uint32_t i = 0; i < g.mCount; ++i)
-        g.pEntries[g.pBucketCursor[bucketOf(g.pScratch[i].mX, g.pScratch[i].mZ)]++] = g.pScratch[i];
+        g.pEntries[g.pBucketCursor[bucketOf(g, g.pScratch[i].mX, g.pScratch[i].mZ)]++] = g.pScratch[i];
 
     for (uint32_t s = 0; s < g.mCount; ++s)
         ecs_get_mut(p->pWorld, g.pEntries[s].mEntity, GridSlot)->slot = s;
+
+    buildEnemyRings(g);
 }
 
 static const GridEntry* lookupTarget(const ecs_world_t* pWorld, const SpatialGrid& g, ecs_entity_t target)
@@ -301,28 +359,34 @@ static const GridEntry* lookupTarget(const ecs_world_t* pWorld, const SpatialGri
 }
 
 // Searches rings of buckets outward and stops once no closer enemy can exist. Returns a slot or -1.
-static int32_t findNearestEnemy(const SpatialGrid& g, float x, float z, uint32_t team)
+static int32_t findNearestEnemy(const SpatialGrid& g, float x, float z, uint32_t team, uint32_t* pBucketsVisited = NULL)
 {
-    const int32_t cx = bucketCoord(x);
-    const int32_t cz = bucketCoord(z);
+    const int32_t cx = bucketCoord(g, x);
+    const int32_t cz = bucketCoord(g, z);
     int32_t       best = -1;
     float         bestD2 = FLT_MAX;
-    for (int32_t r = 0; r < GRID_DIM; ++r)
+    // Rings closer than the nearest enemy bucket hold no enemies, so start there: same result, less work.
+    const uint16_t firstRing = g.pEnemyRings[team][cz * g.mDim + cx];
+    if (firstRing == NO_ENEMY)
+        return -1;
+    for (int32_t r = firstRing; r < g.mDim; ++r)
     {
         const float ringMin = (float)(r - 1) * GRID_BUCKET_SIZE;
         if (best >= 0 && ringMin > 0.0f && ringMin * ringMin > bestD2)
             break;
         for (int32_t bz = cz - r; bz <= cz + r; ++bz)
         {
-            if (bz < 0 || bz >= GRID_DIM)
+            if (bz < 0 || bz >= g.mDim)
                 continue;
             const bool    edgeRow = bz == cz - r || bz == cz + r;
             const int32_t step = edgeRow || r == 0 ? 1 : 2 * r; // interior rows: only the two ring columns
             for (int32_t bx = cx - r; bx <= cx + r; bx += step)
             {
-                if (bx < 0 || bx >= GRID_DIM)
+                if (bx < 0 || bx >= g.mDim)
                     continue;
-                const uint32_t b = (uint32_t)(bz * GRID_DIM + bx);
+                const uint32_t b = (uint32_t)(bz * g.mDim + bx);
+                if (pBucketsVisited)
+                    ++*pBucketsVisited;
                 for (uint32_t s = g.pBucketStart[b]; s < g.pBucketStart[b + 1]; ++s)
                 {
                     const GridEntry& e = g.pEntries[s];
@@ -347,15 +411,15 @@ static void separation(const SpatialGrid& g, ecs_entity_t self, float x, float z
 {
     float         sx = 0.0f;
     float         sz = 0.0f;
-    const int32_t cx = bucketCoord(x);
-    const int32_t cz = bucketCoord(z);
+    const int32_t cx = bucketCoord(g, x);
+    const int32_t cz = bucketCoord(g, z);
     for (int32_t bz = cz - 1; bz <= cz + 1; ++bz)
     {
         for (int32_t bx = cx - 1; bx <= cx + 1; ++bx)
         {
-            if (bx < 0 || bx >= GRID_DIM || bz < 0 || bz >= GRID_DIM)
+            if (bx < 0 || bx >= g.mDim || bz < 0 || bz >= g.mDim)
                 continue;
-            const uint32_t b = (uint32_t)(bz * GRID_DIM + bx);
+            const uint32_t b = (uint32_t)(bz * g.mDim + bx);
             for (uint32_t s = g.pBucketStart[b]; s < g.pBucketStart[b + 1]; ++s)
             {
                 const GridEntry& e = g.pEntries[s];
@@ -459,8 +523,8 @@ static void SteerSystem(ecs_iter_t* it)
         unit[i].animTime += unit[i].moving ? dt * stats.mSpeed / WALK_ANIM_SPEED : dt;
 
         const float r = unit[i].radius;
-        pos[i].x = clampf(pos[i].x + vx * dt, r, ARENA_SIZE - r);
-        pos[i].z = clampf(pos[i].z + vz * dt, r, ARENA_SIZE - r);
+        pos[i].x = clampf(pos[i].x + vx * dt, r, p->mWorldSize - r);
+        pos[i].z = clampf(pos[i].z + vz * dt, r, p->mWorldSize - r);
     }
 }
 
@@ -579,7 +643,18 @@ static bool boardHasPlayerSquad(const BattleSim* p)
 //--------------------------------------------------------------------------------------------
 // Lifetime
 //--------------------------------------------------------------------------------------------
-BattleSim* simCreate(uint32_t threadCount)
+// Army of unitsPerTeam at STRESS_SPACING: cols x rows per team, both facing across STRESS_GAP on a square world.
+static void stressLayout(uint32_t unitsPerTeam, uint32_t* pCols, uint32_t* pRows, float* pWorldSize)
+{
+    const uint32_t cols = (uint32_t)ceilf(sqrtf(2.0f * (float)unitsPerTeam)); // twice as wide as deep
+    const uint32_t rows = cols > 0 ? (unitsPerTeam + cols - 1) / cols : 0;
+    const float    armies = fmaxf((float)cols * STRESS_SPACING, 2.0f * (float)rows * STRESS_SPACING + STRESS_GAP);
+    *pCols = cols;
+    *pRows = rows;
+    *pWorldSize = fmaxf(ARENA_SIZE, armies + 2.0f * STRESS_MARGIN);
+}
+
+BattleSim* simCreate(uint32_t threadCount, uint32_t unitCapacity)
 {
     static bool sEcsInitialized = false;
     if (!sEcsInitialized)
@@ -610,11 +685,20 @@ BattleSim* simCreate(uint32_t threadCount)
     projectileQuery.terms[0].id = ecs_id(Projectile);
     p->pProjectileQuery = ecs_query_init(p->pWorld, &projectileQuery);
 
-    const uint32_t bucketCount = (uint32_t)(GRID_DIM * GRID_DIM);
-    p->mGrid.pEntries = (GridEntry*)tf_malloc(sizeof(GridEntry) * MAX_UNITS);
-    p->mGrid.pScratch = (GridEntry*)tf_malloc(sizeof(GridEntry) * MAX_UNITS);
+    // Size the grid for the largest stress world this capacity allows.
+    uint32_t cols = 0;
+    uint32_t rows = 0;
+    float    maxWorldSize = 0.0f;
+    stressLayout(unitCapacity / 2, &cols, &rows, &maxWorldSize);
+    const uint32_t maxDim = (uint32_t)ceilf(maxWorldSize / GRID_BUCKET_SIZE);
+    const uint32_t bucketCount = maxDim * maxDim;
+    p->mUnitCapacity = unitCapacity;
+    p->mGrid.pEntries = (GridEntry*)tf_malloc(sizeof(GridEntry) * unitCapacity);
+    p->mGrid.pScratch = (GridEntry*)tf_malloc(sizeof(GridEntry) * unitCapacity);
     p->mGrid.pBucketStart = (uint32_t*)tf_malloc(sizeof(uint32_t) * (bucketCount + 1));
     p->mGrid.pBucketCursor = (uint32_t*)tf_malloc(sizeof(uint32_t) * bucketCount);
+    for (uint32_t team = 0; team < TEAM_COUNT; ++team)
+        p->mGrid.pEnemyRings[team] = (uint16_t*)tf_malloc(sizeof(uint16_t) * bucketCount);
 
     // Declaration order is execution order within a phase.
     addSystem(p, "SteerSystem", EcsOnUpdate, SteerSystem, true, ecs_id(Position), ecs_id(Unit), ecs_id(Attack));
@@ -637,6 +721,8 @@ void simDestroy(BattleSim* p)
     tf_free(p->mGrid.pScratch);
     tf_free(p->mGrid.pBucketStart);
     tf_free(p->mGrid.pBucketCursor);
+    for (uint32_t team = 0; team < TEAM_COUNT; ++team)
+        tf_free(p->mGrid.pEnemyRings[team]);
     tf_free(p);
 }
 
@@ -667,6 +753,45 @@ bool simStartBattle(BattleSim* p)
     }
     p->mPhase = PHASE_BATTLE;
     p->mBattleTime = 0.0f;
+    p->pMessage = "";
+    return true;
+}
+
+bool simStressSetup(BattleSim* p, uint32_t unitsPerTeam)
+{
+    if (unitsPerTeam == 0 || 2ull * unitsPerTeam > p->mUnitCapacity)
+    {
+        p->pMessage = "Stress armies exceed the unit capacity";
+        return false;
+    }
+    uint32_t cols = 0;
+    uint32_t rows = 0;
+    float    worldSize = 0.0f;
+    stressLayout(unitsPerTeam, &cols, &rows, &worldSize);
+
+    memset(p->mBoard, UNIT_NONE, sizeof(p->mBoard));
+    ecs_delete_with(p->pWorld, ecs_id(Unit));
+    ecs_delete_with(p->pWorld, ecs_id(Projectile));
+    p->mProjectileCount = 0;
+    setWorldSize(p, worldSize);
+
+    // Row 0 is each army's front: melee in front, tanks behind them, ranged at the back.
+    const float left = 0.5f * (worldSize - (float)cols * STRESS_SPACING);
+    const float mid = 0.5f * worldSize;
+    for (uint32_t k = 0; k < unitsPerTeam; ++k)
+    {
+        const uint32_t col = k % cols;
+        const uint32_t row = k / cols;
+        const UnitType type = row * 10 < rows * 6 ? UNIT_MELEE : (row * 10 < rows * 8 ? UNIT_TANK : UNIT_RANGED);
+        const float    x = left + ((float)col + 0.5f) * STRESS_SPACING;
+        const float    depth = 0.5f * STRESS_GAP + ((float)row + 0.5f) * STRESS_SPACING;
+        spawnUnit(p, TEAM_PLAYER, type, x, mid - depth, 0xFFFF);
+        spawnUnit(p, TEAM_ENEMY, type, x, mid + depth, 0xFFFF);
+    }
+
+    p->mPhase = PHASE_BATTLE;
+    p->mBattleTime = 0.0f;
+    p->mResultTime = 0.0f;
     p->pMessage = "";
     return true;
 }
@@ -810,6 +935,10 @@ float simGetBattleTime(const BattleSim* p) { return p->mBattleTime; }
 
 uint32_t simGetProjectileCount(const BattleSim* p) { return p->mProjectileCount; }
 
+uint32_t simGetUnitCapacity(const BattleSim* p) { return p->mUnitCapacity; }
+
+float simGetWorldSize(const BattleSim* p) { return p->mWorldSize; }
+
 //--------------------------------------------------------------------------------------------
 // Render data
 //--------------------------------------------------------------------------------------------
@@ -829,7 +958,7 @@ void simFillRenderData(BattleSim* p, RenderData* pOut)
         const Health*   health = ecs_field(&it, Health, 2);
         for (int32_t i = 0; i < it.count; ++i)
         {
-            ASSERT(pOut->mUnitCount < MAX_UNITS);
+            ASSERT(pOut->mUnitCount < p->mUnitCapacity);
             const float   scale = gUnitStats[unit[i].type].mScale * UNIT_MODEL_SCALE;
             const float3& color = TEAM_COLORS[unit[i].team];
             UnitInstance& instance = pOut->pUnits[pOut->mUnitCount++];
@@ -842,7 +971,7 @@ void simFillRenderData(BattleSim* p, RenderData* pOut)
 
             if (health[i].hp < health[i].maxHp)
             {
-                ASSERT(pOut->mBillboardCount < MAX_BILLBOARDS);
+                ASSERT(pOut->mBillboardCount < p->mUnitCapacity + MAX_PROJECTILES);
                 const float        fill = health[i].hp > 0.0f ? health[i].hp / health[i].maxHp : 0.0f;
                 BillboardInstance& bar = pOut->pBillboards[pOut->mBillboardCount++];
                 bar.mCenterHalfWidth = float4(pos[i].x, HEALTH_BAR_HEIGHT * scale, pos[i].z, 0.4f);
@@ -858,7 +987,7 @@ void simFillRenderData(BattleSim* p, RenderData* pOut)
         const Projectile* projectile = ecs_field(&it, Projectile, 0);
         for (int32_t i = 0; i < it.count; ++i)
         {
-            ASSERT(pOut->mBillboardCount < MAX_BILLBOARDS);
+            ASSERT(pOut->mBillboardCount < p->mUnitCapacity + MAX_PROJECTILES);
             BillboardInstance& b = pOut->pBillboards[pOut->mBillboardCount++];
             b.mCenterHalfWidth = float4(projectile[i].x, projectile[i].y, projectile[i].z, 0.12f);
             b.mFullColorFill = float4(1.0f, 0.85f, 0.2f, 1.0f);
@@ -941,7 +1070,7 @@ bool simTestAllPositionsFinite(BattleSim* p)
 
 float simTestMinUnitDistance(BattleSim* p, Team team)
 {
-    Position*  points = (Position*)tf_malloc(sizeof(Position) * MAX_UNITS);
+    Position*  points = (Position*)tf_malloc(sizeof(Position) * p->mUnitCapacity);
     uint32_t   count = 0;
     ecs_iter_t it = ecs_query_iter(p->pWorld, p->pUnitQuery);
     while (ecs_query_next(&it))
@@ -963,4 +1092,39 @@ float simTestMinUnitDistance(BattleSim* p, Team team)
         }
     tf_free(points);
     return sqrtf(minD2);
+}
+
+SimSearchStats simTestNearestEnemySearch(BattleSim* p)
+{
+    buildGrid(p);
+    const SpatialGrid& g = p->mGrid;
+    SimSearchStats     stats = {};
+    uint64_t           visited = 0;
+    for (uint32_t i = 0; i < g.mCount; ++i)
+    {
+        const GridEntry& self = g.pEntries[i];
+        uint32_t         buckets = 0;
+        const int32_t    found = findNearestEnemy(g, self.mX, self.mZ, self.mTeam, &buckets);
+        visited += buckets;
+        ++stats.mSearches;
+
+        float bestD2 = FLT_MAX;
+        for (uint32_t j = 0; j < g.mCount; ++j)
+            if (g.pEntries[j].mTeam != self.mTeam)
+            {
+                const float dx = g.pEntries[j].mX - self.mX;
+                const float dz = g.pEntries[j].mZ - self.mZ;
+                bestD2 = fminf(bestD2, dx * dx + dz * dz);
+            }
+        float foundD2 = FLT_MAX;
+        if (found >= 0)
+        {
+            const float dx = g.pEntries[found].mX - self.mX;
+            const float dz = g.pEntries[found].mZ - self.mZ;
+            foundD2 = dx * dx + dz * dz;
+        }
+        stats.mMismatches += foundD2 == bestD2 ? 0u : 1u;
+    }
+    stats.mAverageBucketsVisited = stats.mSearches ? (float)visited / (float)stats.mSearches : 0.0f;
+    return stats;
 }

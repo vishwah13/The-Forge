@@ -1,38 +1,41 @@
-// 40_AutoBattler: top-down auto battler. Gameplay lives in AutoBattlerSim (Flecs); this file owns
+// AutoBattler: top-down auto battler. Gameplay lives in AutoBattlerSim (Flecs); this file owns
 // rendering, camera, input and UI.
 
 #include "AnimationBake.h"
 #include "AutoBattlerSim.h"
+#include "UnitCulling.h"
+#include "UnitLod.h"
 
 #include <stdlib.h>
 #include <string.h>
 
 // Interfaces
-#include "../../../../Common_3/Application/Interfaces/IApp.h"
-#include "../../../../Common_3/Application/Interfaces/ICameraController.h"
-#include "../../../../Common_3/Application/Interfaces/IFont.h"
-#include "../../../../Common_3/Application/Interfaces/IProfiler.h"
-#include "../../../../Common_3/Application/Interfaces/IUI.h"
-#include "../../../../Common_3/OS/Interfaces/IInput.h"
-#include "../../../../Common_3/Utilities/Interfaces/IFileSystem.h"
-#include "../../../../Common_3/Utilities/Interfaces/ILog.h"
-#include "../../../../Common_3/Utilities/Interfaces/IThread.h"
+#include "../../../Common_3/Application/Interfaces/IApp.h"
+#include "../../../Common_3/Application/Interfaces/IFont.h"
+#include "../../../Common_3/Application/Interfaces/IProfiler.h"
+#include "../../../Common_3/Application/Interfaces/IUI.h"
+#include "../../../Common_3/OS/Interfaces/IInput.h"
+#include "../../../Common_3/Utilities/Interfaces/IFileSystem.h"
+#include "../../../Common_3/Utilities/Interfaces/ILog.h"
+#include "../../../Common_3/Utilities/Interfaces/IThread.h"
+#include "../../../Common_3/Utilities/Interfaces/ITime.h"
 
 // Rendering
-#include "../../../../Common_3/Graphics/Interfaces/IGraphics.h"
-#include "../../../../Common_3/Resources/ResourceLoader/Interfaces/IResourceLoader.h"
-#include "../../../../Common_3/Utilities/RingBuffer.h"
+#include "../../../Common_3/Graphics/Interfaces/IGraphics.h"
+#include "../../../Common_3/Resources/ResourceLoader/Interfaces/IResourceLoader.h"
+#include "../../../Common_3/Utilities/RingBuffer.h"
 
 // Animation
-#include "../../../../Common_3/Resources/AnimationSystem/Animation/Rig.h"
+#include "../../../Common_3/Resources/AnimationSystem/Animation/Rig.h"
 
-#include "../../../../Common_3/Utilities/Math/MathTypes.h"
+#include "../../../Common_3/Utilities/Math/MathTypes.h"
 
 // fsl
-#include "../../../../Common_3/Graphics/FSL/defaults.h"
+#include "../../../Common_3/Graphics/FSL/defaults.h"
+#include "./Shaders/FSL/Cull.srt.h"
 #include "./Shaders/FSL/Global.srt.h"
 
-#include "../../../../Common_3/Utilities/Interfaces/IMemory.h"
+#include "../../../Common_3/Utilities/Interfaces/IMemory.h"
 
 const uint32_t gDataBufferCount = 2;
 
@@ -41,13 +44,19 @@ Queue*        pGraphicsQueue = NULL;
 GpuCmdRing    gGraphicsCmdRing = {};
 SwapChain*    pSwapChain = NULL;
 RenderTarget* pDepthBuffer = NULL;
-Semaphore*    pImageAcquiredSemaphore = NULL;
+Semaphore*    pImageAcquiredSemaphore[gDataBufferCount] = {};
 uint32_t      gFrameIndex = 0;
 ProfileToken  gGpuProfileToken;
 
 Shader*        pUnitShader = NULL;
 Shader*        pGroundShader = NULL;
 Shader*        pBillboardShader = NULL;
+Shader*        pCullClearShader = NULL;
+Shader*        pCullShader = NULL;
+Pipeline*      pCullClearPipeline = NULL;
+Pipeline*      pCullPipeline = NULL;
+DescriptorSet* pSetUnitsPerBatch = NULL; // graphics: one set per LOD, each that LOD's visible unit list
+DescriptorSet* pSetCullPerBatch = NULL;  // compute: visible unit list and draw arguments, writable
 Pipeline*      pUnitPipeline = NULL;
 Pipeline*      pGroundPipeline = NULL;
 Pipeline*      pBillboardPipeline = NULL;
@@ -65,14 +74,43 @@ Buffer* pBonePaletteBuffer = NULL; // every baked animation frame, static
 Buffer* pUnitInstanceBuffers[gDataBufferCount] = {};
 Buffer* pBillboardBuffers[gDataBufferCount] = {};
 
+// GPU culling: the cull pass sorts visible units into one list per LOD and fills one indexed indirect
+// draw per LOD. One copy each is enough: the queue runs the cull and the draws of each frame in order.
+static const uint32_t UNIT_DRAW_ARG_COUNT = 5; // IndirectDrawIndexArguments
+static const uint32_t CULL_GROUP_SIZE = 64;    // must match CULL_GROUP_SIZE in Shaders/FSL/AutoBattler.h.fsl
+static const uint32_t DEBUG_LOD_COLORS = 1;    // must match DEBUG_LOD_COLORS in Shaders/FSL/AutoBattler.h.fsl
+bool                  gShowLodColors = false;
+Buffer*             pVisibleUnitsBuffer = NULL; // UNIT_LOD_COUNT lists of unit capacity entries
+Buffer*             pUnitDrawArgsBuffer = NULL; // UNIT_LOD_COUNT draws
+Buffer*             pUnitLodIndexBuffer = NULL; // every LOD's indices into the unit mesh's vertices
+uint32_t              gUnitCapacity = 0;
+uint32_t              gLodFirstIndex[UNIT_LOD_COUNT] = {};
+uint32_t              gLodIndexCount[UNIT_LOD_COUNT] = {};
+
+// Pipeline statistics of the unit draws confirm how many triangles the GPU actually drew.
+QueryPool* pUnitStatsQueryPool[gDataBufferCount] = {};
+uint64_t     gCpuTriangles[gDataBufferCount] = {}; // CPU reference for the frame that used each query
+uint64_t     gGpuTriangles = 0;                    // from the latest resolved query
+int64_t      gGpuCpuMismatch = 0;                  // gpu - cpu triangles for that same frame
+uint32_t     gCpuLodUnits[UNIT_LOD_COUNT] = {};    // units per LOD in the latest CPU reference cull
+
 // Must match FrameUniforms in Shaders/FSL/AutoBattler.h.fsl.
 struct FrameUniforms
 {
-    mat4   mViewProj;
-    float4 mCamRight;
-    float4 mCamUp;
-    float4 mHoverCell; // x, z = cell; y = 0 none, 1 can place, 2 cannot; w = cell size
-    float4 mArena;     // x = arena size, y = world z where the enemy half starts
+    mat4     mViewProj;
+    float4   mCamRight;
+    float4   mCamUp;
+    float4   mHoverCell; // x, z = cell; y = 0 none, 1 can place, 2 cannot; w = cell size
+    float4   mArena;     // x = arena size, y = world z where the enemy half starts
+    float4   mCullPlanes[6];
+    float4   mUnitBounds; // x = bounding sphere centre height, y = radius (model units), z, w = LOD distances in radii
+    float4   mCameraPos;
+    uint32_t mUnitCount;
+    uint32_t mUnitCapacity;
+    uint32_t mDebugFlags; // DEBUG_* bits
+    uint32_t mPad;
+    uint32_t mLodFirstIndex[4]; // uint4 in the shader; UNIT_LOD_COUNT used
+    uint32_t mLodIndexCount[4];
 };
 FrameUniforms gFrameUniforms = {};
 
@@ -105,6 +143,27 @@ uint32_t gSmokeStartUnits = 0;
 float    gSmokeSeconds = 0.0f;
 Phase    gSmokeResult = PHASE_PREP;
 
+// --stress: runs ever larger battles on a world sized to each army, writes per-tier timings and quits.
+// The sim advances a fixed STRESS_STEP per frame (slow motion when the frame is slower), so every tier
+// measures the same battle seconds with the same sim work per frame.
+static const uint32_t STRESS_TIERS[] = { 4096, 8192, 16384, 32768, 65536 }; // total units, both teams
+static const float    STRESS_STEP = 1.0f / 60.0f;
+static const uint32_t STRESS_WARMUP_FRAMES = 60;   // battle seconds 0-1
+static const uint32_t STRESS_MEASURE_FRAMES = 300; // battle seconds 1-6
+static const char*    STRESS_VIEWS[] = { "field", "zoom" }; // whole field on screen, then a gameplay camera
+static const float    STRESS_ZOOM_DISTANCE = 60.0f;
+static const uint32_t STRESS_RUNS = TF_ARRAY_COUNT(STRESS_TIERS) * TF_ARRAY_COUNT(STRESS_VIEWS);
+bool     gStressMode = false;
+uint32_t gStressRun = 0; // tier = run / view count, view = run % view count
+uint32_t gStressFrame = 0;
+int64_t  gStressSimUs = 0;
+float    gStressGpuMs = 0.0f;
+float    gStressSeconds = 0.0f;
+uint64_t gStressGpuTriangles = 0; // sums over measured frames
+uint64_t gStressLodUnits[UNIT_LOD_COUNT] = {};
+int64_t  gStressWorstMismatch = 0; // gpu - cpu triangles
+char     gStressReport[4096] = {};
+
 UIComponent* pGuiWindow = NULL;
 int32_t      gSelectedType = UNIT_MELEE;
 bool         gStartRequested = false;
@@ -114,8 +173,6 @@ InputEnum    CUSTOM_SELL = {};
 InputEnum    CUSTOM_ZOOM = {};
 
 static const char* PHASE_NAMES[] = { "Prep", "Battle", "Victory", "Defeat" };
-
-static float clampf(float v, float lo, float hi) { return v < lo ? lo : (v > hi ? hi : v); }
 
 static void writeTextFile(const char* pFileName, const char* pText)
 {
@@ -134,9 +191,11 @@ public:
         for (int i = 1; i < argc; ++i)
         {
             if (strcmp(argv[i], "--selftest") == 0)
-                exit(runAutoBattlerSelfTest("40_AutoBattler_selftest.txt") == 0 ? 0 : 1);
+                exit(runAutoBattlerSelfTest("AutoBattler_selftest.txt") == 0 ? 0 : 1);
             if (strcmp(argv[i], "--smoke") == 0)
                 gSmokeMode = true;
+            if (strcmp(argv[i], "--stress") == 0)
+                gStressMode = true;
         }
 
         gRig.Initialize(RD_ANIMATIONS, "stormtrooper/skeleton.ozz");
@@ -164,7 +223,8 @@ public:
         cmdRingDesc.mAddSyncPrimitives = true;
         initGpuCmdRing(pRenderer, &cmdRingDesc, &gGraphicsCmdRing);
 
-        initSemaphore(pRenderer, &pImageAcquiredSemaphore);
+        for (uint32_t i = 0; i < gDataBufferCount; ++i)
+            initSemaphore(pRenderer, &pImageAcquiredSemaphore[i]);
         initResourceLoaderInterface(pRenderer);
 
         RootSignatureDesc rootDesc = {};
@@ -206,16 +266,18 @@ public:
         instanceDesc.mDesc.mFlags = BUFFER_CREATION_FLAG_NONE;
         instanceDesc.mDesc.mStartState = RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
         instanceDesc.mDesc.mFirstElement = 0;
+        const uint32_t unitCapacity = gStressMode ? STRESS_TIERS[TF_ARRAY_COUNT(STRESS_TIERS) - 1] : MAX_UNITS;
+        const uint32_t billboardCapacity = unitCapacity + MAX_PROJECTILES;
         for (uint32_t i = 0; i < gDataBufferCount; ++i)
         {
-            instanceDesc.mDesc.mElementCount = MAX_UNITS;
+            instanceDesc.mDesc.mElementCount = unitCapacity;
             instanceDesc.mDesc.mStructStride = sizeof(UnitInstance);
-            instanceDesc.mDesc.mSize = (uint64_t)MAX_UNITS * sizeof(UnitInstance);
+            instanceDesc.mDesc.mSize = (uint64_t)unitCapacity * sizeof(UnitInstance);
             instanceDesc.ppBuffer = &pUnitInstanceBuffers[i];
             addResource(&instanceDesc, NULL);
-            instanceDesc.mDesc.mElementCount = MAX_BILLBOARDS;
+            instanceDesc.mDesc.mElementCount = billboardCapacity;
             instanceDesc.mDesc.mStructStride = sizeof(BillboardInstance);
-            instanceDesc.mDesc.mSize = (uint64_t)MAX_BILLBOARDS * sizeof(BillboardInstance);
+            instanceDesc.mDesc.mSize = (uint64_t)billboardCapacity * sizeof(BillboardInstance);
             instanceDesc.ppBuffer = &pBillboardBuffers[i];
             addResource(&instanceDesc, NULL);
         }
@@ -254,7 +316,7 @@ public:
         geomDesc.pVertexLayout = &gUnitVertexLayout;
         geomDesc.ppGeometry = &pUnitGeom;
         geomDesc.ppGeometryData = &pUnitGeomData;
-        geomDesc.mFlags = GEOMETRY_LOAD_FLAG_SHADOWED;
+        geomDesc.mFlags = GEOMETRY_LOAD_FLAG_SHADOWED; // indices and positions for the LODs
         addResource(&geomDesc, NULL);
 
         TextureLoadDesc textureDesc = {};
@@ -275,13 +337,42 @@ ab_zoom; buttonanalog; MOUSE_WHEEL_DOWN; 1.0f; MOUSE_WHEEL_UP; -1.0f)");
         CUSTOM_SELL = inputGetCustomBindingEnum("ab_sell");
         CUSTOM_ZOOM = inputGetCustomBindingEnum("ab_zoom");
 
-        gRenderData.pUnits = (UnitInstance*)tf_malloc(sizeof(UnitInstance) * MAX_UNITS);
-        gRenderData.pBillboards = (BillboardInstance*)tf_malloc(sizeof(BillboardInstance) * MAX_BILLBOARDS);
+        BufferLoadDesc cullDesc = {};
+        cullDesc.mDesc.mDescriptors = DESCRIPTOR_TYPE_BUFFER | DESCRIPTOR_TYPE_RW_BUFFER;
+        cullDesc.mDesc.mMemoryUsage = RESOURCE_MEMORY_USAGE_GPU_ONLY;
+        cullDesc.mDesc.mStartState = RESOURCE_STATE_UNORDERED_ACCESS;
+        gUnitCapacity = unitCapacity;
+        cullDesc.mDesc.mElementCount = (uint64_t)UNIT_LOD_COUNT * unitCapacity;
+        cullDesc.mDesc.mStructStride = sizeof(uint32_t);
+        cullDesc.mDesc.mSize = cullDesc.mDesc.mElementCount * sizeof(uint32_t);
+        cullDesc.mDesc.pName = "Visible units";
+        cullDesc.ppBuffer = &pVisibleUnitsBuffer;
+        addResource(&cullDesc, NULL);
+        cullDesc.mDesc.mDescriptors = DESCRIPTOR_TYPE_BUFFER | DESCRIPTOR_TYPE_RW_BUFFER | DESCRIPTOR_TYPE_INDIRECT_BUFFER;
+        cullDesc.mDesc.mElementCount = UNIT_LOD_COUNT * UNIT_DRAW_ARG_COUNT;
+        cullDesc.mDesc.mSize = cullDesc.mDesc.mElementCount * sizeof(uint32_t);
+        cullDesc.mDesc.pName = "Unit draw arguments";
+        cullDesc.ppBuffer = &pUnitDrawArgsBuffer;
+        addResource(&cullDesc, NULL);
+
+        if (pRenderer->pGpu->mPipelineStatsQueries)
+        {
+            QueryPoolDesc poolDesc = {};
+            poolDesc.mQueryCount = 1;
+            poolDesc.mType = QUERY_TYPE_PIPELINE_STATISTICS;
+            for (uint32_t i = 0; i < gDataBufferCount; ++i)
+                initQueryPool(pRenderer, &poolDesc, &pUnitStatsQueryPool[i]);
+        }
+
+        gRenderData.pUnits = (UnitInstance*)tf_malloc(sizeof(UnitInstance) * unitCapacity);
+        gRenderData.pBillboards = (BillboardInstance*)tf_malloc(sizeof(BillboardInstance) * billboardCapacity);
 
         const uint32_t cores = getNumCPUCores();
-        pSim = simCreate(cores > 1 ? cores - 1 : 1);
+        pSim = simCreate(cores > 1 ? cores - 1 : 1, unitCapacity);
 
         waitForAllResourceLoads();
+        if (!addUnitLods())
+            return false;
 
         // Bake idle/walk (retargeted from the stickFigure) and dance into one static palette table.
         if (!bakeAnimations(&gRig, pUnitGeomData, &gBaked))
@@ -300,7 +391,6 @@ ab_zoom; buttonanalog; MOUSE_WHEEL_DOWN; 1.0f; MOUSE_WHEEL_UP; -1.0f)");
         waitForAllResourceLoads();
         freeBakedAnimations(&gBaked); // uploaded; offsets and frame counts stay valid
 
-        gFrameIndex = 0;
         return true;
     }
 
@@ -330,8 +420,15 @@ ab_zoom; buttonanalog; MOUSE_WHEEL_DOWN; 1.0f; MOUSE_WHEEL_UP; -1.0f)");
         removeResource(pUnitTexture);
         removeResource(pGroundTexture);
         removeResource(pBonePaletteBuffer);
+        removeResource(pVisibleUnitsBuffer);
+        removeResource(pUnitDrawArgsBuffer);
+        removeResource(pUnitLodIndexBuffer);
+        for (uint32_t i = 0; i < gDataBufferCount; ++i)
+            if (pUnitStatsQueryPool[i])
+                exitQueryPool(pRenderer, pUnitStatsQueryPool[i]);
 
-        exitSemaphore(pRenderer, pImageAcquiredSemaphore);
+        for (uint32_t i = 0; i < gDataBufferCount; ++i)
+            exitSemaphore(pRenderer, pImageAcquiredSemaphore[i]);
         exitGpuCmdRing(pRenderer, &gGraphicsCmdRing);
         exitRootSignature(pRenderer);
         exitResourceLoaderInterface(pRenderer);
@@ -410,14 +507,14 @@ ab_zoom; buttonanalog; MOUSE_WHEEL_DOWN; 1.0f; MOUSE_WHEEL_UP; -1.0f)");
         {
             if (inputGetValue(0, CUSTOM_TOGGLE_FULLSCREEN))
                 toggleFullscreen(pWindow);
-            if (inputGetValue(0, CUSTOM_TOGGLE_UI))
-                uiToggleActive();
             if (inputGetValue(0, CUSTOM_EXIT))
                 requestShutdown();
         }
 
         if (gSmokeMode)
             updateSmoke(deltaTime);
+        if (gStressMode)
+            updateStress(deltaTime);
 
         if (gStartRequested)
         {
@@ -430,11 +527,14 @@ ab_zoom; buttonanalog; MOUSE_WHEEL_DOWN; 1.0f; MOUSE_WHEEL_UP; -1.0f)");
             simRestart(pSim);
         }
 
-        simStep(pSim, deltaTime);
+        const int64_t simStartUs = getUSec(true);
+        simStep(pSim, gStressMode ? STRESS_STEP : deltaTime);
+        gStressSimUs += getUSec(true) - simStartUs;
         updateCameraInput(deltaTime);
         updateCamera(deltaTime);
         updatePicking();
         simFillRenderData(pSim, &gRenderData);
+        updateCullUniforms();
         // The sim says which clip and time each unit plays; turn that into its palette offset.
         for (uint32_t i = 0; i < gRenderData.mUnitCount; ++i)
         {
@@ -444,6 +544,7 @@ ab_zoom; buttonanalog; MOUSE_WHEEL_DOWN; 1.0f; MOUSE_WHEEL_UP; -1.0f)");
         updateHud();
     }
 
+    // Squad radio buttons, Start Battle / Restart and the LOD debug view; button presses are applied in Update.
     void addGui()
     {
         UIComponentDesc guiDesc = {};
@@ -471,6 +572,10 @@ ab_zoom; buttonanalog; MOUSE_WHEEL_DOWN; 1.0f; MOUSE_WHEEL_UP; -1.0f)");
         ButtonWidget restartButton = {};
         UIWidget*    pRestart = uiAddComponentWidget(pGuiWindow, "Restart", &restartButton, WIDGET_TYPE_BUTTON);
         uiSetWidgetOnEditedCallback(pRestart, NULL, [](void*) { gRestartRequested = true; });
+
+        CheckboxWidget lodColors = {};
+        lodColors.pData = &gShowLodColors;
+        uiAddComponentWidget(pGuiWindow, "Debug: LOD colours (0 G, 1 Y, 2 R)", &lodColors, WIDGET_TYPE_CHECKBOX);
     }
 
     void updateCameraInput(float deltaTime)
@@ -478,9 +583,10 @@ ab_zoom; buttonanalog; MOUSE_WHEEL_DOWN; 1.0f; MOUSE_WHEEL_UP; -1.0f)");
         if (uiIsFocused())
             return;
         const float panSpeed = gCameraDistance * 0.8f;
-        gCameraTarget.x = clampf(gCameraTarget.x + inputGetValue(0, CUSTOM_MOVE_X) * panSpeed * deltaTime, 0.0f, ARENA_SIZE);
-        gCameraTarget.y = clampf(gCameraTarget.y + inputGetValue(0, CUSTOM_MOVE_Y) * panSpeed * deltaTime, 0.0f, ARENA_SIZE);
-        gCameraDistance = clampf(gCameraDistance + inputGetValue(0, CUSTOM_ZOOM) * 5.0f, 20.0f, 120.0f);
+        const float worldSize = simGetWorldSize(pSim);
+        gCameraTarget.x = clampf(gCameraTarget.x + inputGetValue(0, CUSTOM_MOVE_X) * panSpeed * deltaTime, 0.0f, worldSize);
+        gCameraTarget.y = clampf(gCameraTarget.y + inputGetValue(0, CUSTOM_MOVE_Y) * panSpeed * deltaTime, 0.0f, worldSize);
+        gCameraDistance = clampf(gCameraDistance + inputGetValue(0, CUSTOM_ZOOM) * 5.0f, 20.0f, fmaxf(120.0f, 1.5f * worldSize));
     }
 
     // Casts the mouse ray onto the ground, highlights the cell and buys/sells on click (prep only).
@@ -496,8 +602,7 @@ ab_zoom; buttonanalog; MOUSE_WHEEL_DOWN; 1.0f; MOUSE_WHEEL_UP; -1.0f)");
 
         int32_t cellX = 0;
         int32_t cellZ = 0;
-        if (!rayToCell(float3(gCameraEye.getX(), gCameraEye.getY(), gCameraEye.getZ()), float3(dir.getX(), dir.getY(), dir.getZ()), &cellX,
-                       &cellZ))
+        if (!rayToCell(v3ToF3(gCameraEye), v3ToF3(dir), &cellX, &cellZ))
             return;
 
         const bool canBuy = simCanBuySquad(pSim, cellX, cellZ, (UnitType)gSelectedType);
@@ -519,11 +624,12 @@ ab_zoom; buttonanalog; MOUSE_WHEEL_DOWN; 1.0f; MOUSE_WHEEL_UP; -1.0f)");
 
         const float        aspectInverse = (float)mSettings.mHeight / (float)mSettings.mWidth;
         const mat4         view = mat4::lookAtLH(Point3(gCameraEye), Point3(target), vec3(0.0f, 1.0f, 0.0f));
-        const CameraMatrix proj = CameraMatrix::perspectiveReverseZ(CAMERA_FOV_X, aspectInverse, 0.5f, 500.0f);
-        gFrameUniforms.mViewProj = proj.mCamera * view;
-        gFrameUniforms.mCamRight = float4(gCameraRight.getX(), gCameraRight.getY(), gCameraRight.getZ(), 0.0f);
-        gFrameUniforms.mCamUp = float4(gCameraUp.getX(), gCameraUp.getY(), gCameraUp.getZ(), 0.0f);
-        gFrameUniforms.mArena = float4(ARENA_SIZE, (float)PLAYER_ROWS * CELL_SIZE, 0.0f, 0.0f);
+        const mat4         proj = mat4::perspectiveLH_ReverseZ(CAMERA_FOV_X, aspectInverse, 0.5f, 2000.0f);
+        gFrameUniforms.mViewProj = proj * view;
+        gFrameUniforms.mCamRight = float4(v3ToF3(gCameraRight), 0.0f);
+        gFrameUniforms.mCamUp = float4(v3ToF3(gCameraUp), 0.0f);
+        const float worldSize = simGetWorldSize(pSim);
+        gFrameUniforms.mArena = float4(worldSize, 0.5f * worldSize, 0.0f, 0.0f); // the enemy half starts halfway
         gFrameUniforms.mHoverCell = float4(0.0f, 0.0f, 0.0f, CELL_SIZE);
     }
 
@@ -581,10 +687,144 @@ ab_zoom; buttonanalog; MOUSE_WHEEL_DOWN; 1.0f; MOUSE_WHEEL_UP; -1.0f)");
             char summary[256];
             snprintf(summary, sizeof(summary), "units_at_start=%u\nframes=%u\nseconds=%.1f\navg_frame_ms=%.2f\nresult=%s\n", gSmokeStartUnits,
                      gSmokeFrames, gSmokeSeconds, 1000.0f * gSmokeSeconds / (float)gSmokeFrames, PHASE_NAMES[gSmokeResult]);
-            writeTextFile("40_AutoBattler_smoke.txt", summary);
+            writeTextFile("AutoBattler_smoke.txt", summary);
             gSmokeDone = true;
             requestShutdown();
         }
+    }
+
+    // Each tier runs once per view: warm up, then average sim, GPU and frame time, and the units the GPU
+    // drew against the CPU reference cull of the same frames.
+    void updateStress(float deltaTime)
+    {
+        if (gStressRun >= STRESS_RUNS)
+            return;
+        const uint32_t tier = gStressRun / TF_ARRAY_COUNT(STRESS_VIEWS);
+        const uint32_t view = gStressRun % TF_ARRAY_COUNT(STRESS_VIEWS);
+        if (gStressFrame == 0)
+        {
+            if (gStressRun == 0)
+                snprintf(gStressReport, sizeof(gStressReport),
+                         "# units  view   world_m  frame_ms  sim_ms  gpu_ms  fps   lod0   lod1   lod2  gpu_mtris  worst_gpu_minus_cpu_tris  "
+                         "alive_at_end\n");
+            simStressSetup(pSim, STRESS_TIERS[tier] / 2);
+            const float worldSize = simGetWorldSize(pSim);
+            gCameraTarget = view == 0 ? float2(0.5f * worldSize, 0.45f * worldSize) : float2(0.5f * worldSize, 0.5f * worldSize);
+            gCameraDistance = view == 0 ? 1.1f * worldSize : STRESS_ZOOM_DISTANCE;
+        }
+        ++gStressFrame;
+        if (gStressFrame == STRESS_WARMUP_FRAMES)
+        {
+            gStressSimUs = 0;
+            gStressGpuMs = 0.0f;
+            gStressSeconds = 0.0f;
+            gStressGpuTriangles = 0;
+            memset(gStressLodUnits, 0, sizeof(gStressLodUnits));
+            gStressWorstMismatch = 0;
+        }
+        else if (gStressFrame > STRESS_WARMUP_FRAMES)
+        {
+            gStressGpuMs += getGpuProfileTime(gGpuProfileToken);
+            gStressSeconds += deltaTime;
+            gStressGpuTriangles += gGpuTriangles;
+            for (uint32_t lod = 0; lod < UNIT_LOD_COUNT; ++lod)
+                gStressLodUnits[lod] += gCpuLodUnits[lod];
+            if (llabs(gGpuCpuMismatch) > llabs(gStressWorstMismatch))
+                gStressWorstMismatch = gGpuCpuMismatch;
+        }
+        if (gStressFrame < STRESS_WARMUP_FRAMES + STRESS_MEASURE_FRAMES)
+            return;
+
+        // Updates run before simStep, so the reset at the warm-up frame and this report each bracket exactly N steps.
+        const float  frames = (float)STRESS_MEASURE_FRAMES;
+        const float  frameMs = 1000.0f * gStressSeconds / frames;
+        const size_t used = strlen(gStressReport);
+        snprintf(gStressReport + used, sizeof(gStressReport) - used,
+                 "%7u  %-5s  %7.0f  %8.2f  %6.2f  %6.2f  %4.0f  %5.0f  %5.0f  %5.0f  %9.2f  %24lld  %u\n", STRESS_TIERS[tier],
+                 STRESS_VIEWS[view], simGetWorldSize(pSim), frameMs, (float)gStressSimUs / 1000.0f / frames, gStressGpuMs / frames,
+                 1000.0f / frameMs, (double)gStressLodUnits[0] / frames, (double)gStressLodUnits[1] / frames,
+                 (double)gStressLodUnits[2] / frames, (double)gStressGpuTriangles / frames / 1e6, (long long)gStressWorstMismatch,
+                 simGetUnitCount(pSim, TEAM_PLAYER) + simGetUnitCount(pSim, TEAM_ENEMY));
+        ++gStressRun;
+        gStressFrame = 0;
+        if (gStressRun == STRESS_RUNS)
+        {
+            writeTextFile("AutoBattler_stress.txt", gStressReport);
+            requestShutdown();
+        }
+    }
+
+    // Frustum planes and counts for the GPU cull pass.
+    void updateCullUniforms()
+    {
+        frustumPlanesFromViewProj(gFrameUniforms.mViewProj, gFrameUniforms.mCullPlanes);
+        gFrameUniforms.mUnitBounds = float4(UNIT_BOUND_CENTER_Y, UNIT_BOUND_RADIUS, UNIT_LOD_DISTANCES[0], UNIT_LOD_DISTANCES[1]);
+        gFrameUniforms.mCameraPos = float4(v3ToF3(gCameraEye), 1.0f);
+        gFrameUniforms.mUnitCount = gRenderData.mUnitCount;
+        gFrameUniforms.mUnitCapacity = gUnitCapacity;
+        gFrameUniforms.mDebugFlags = gShowLodColors ? DEBUG_LOD_COLORS : 0u;
+        for (uint32_t lod = 0; lod < UNIT_LOD_COUNT; ++lod)
+        {
+            gFrameUniforms.mLodFirstIndex[lod] = gLodFirstIndex[lod];
+            gFrameUniforms.mLodIndexCount[lod] = gLodIndexCount[lod];
+        }
+    }
+
+    // CPU reference of the cull pass: units per LOD, and the triangles the GPU should draw for them.
+    uint64_t cullOnCpu(uint32_t lodUnits[UNIT_LOD_COUNT])
+    {
+        memset(lodUnits, 0, sizeof(uint32_t) * UNIT_LOD_COUNT);
+        const float3 eye = gFrameUniforms.mCameraPos.getXYZ();
+        for (uint32_t i = 0; i < gRenderData.mUnitCount; ++i)
+        {
+            const int32_t lod = unitLod(gFrameUniforms.mCullPlanes, eye, gRenderData.pUnits[i].mWorld);
+            if (lod >= 0)
+                ++lodUnits[lod];
+        }
+        uint64_t triangles = 0;
+        for (uint32_t lod = 0; lod < UNIT_LOD_COUNT; ++lod)
+            triangles += (uint64_t)lodUnits[lod] * (gLodIndexCount[lod] / 3);
+        return triangles;
+    }
+
+    // Simplified index lists over the unit mesh's own vertices, packed into one index buffer.
+    bool addUnitLods()
+    {
+        const GeometryData::ShadowData* pCpu = pUnitGeomData->pShadow;
+        const uint32_t                 indexCount = pUnitGeom->mIndexCount;
+        uint32_t*                      pIndices = (uint32_t*)tf_malloc(sizeof(uint32_t) * indexCount);
+        for (uint32_t i = 0; i < indexCount; ++i)
+            pIndices[i] = pUnitGeom->mIndexType == INDEX_TYPE_UINT16 ? ((const uint16_t*)pCpu->pIndices)[i] : ((const uint32_t*)pCpu->pIndices)[i];
+
+        UnitLods   lods = {};
+        const bool built = buildUnitLods(pIndices, indexCount, (const float*)pCpu->pAttributes[SEMANTIC_POSITION], pUnitGeom->mVertexCount,
+                                         pCpu->mVertexStrides[SEMANTIC_POSITION], &lods);
+        tf_free(pIndices);
+        removeGeometryShadowData(pUnitGeomData);
+        if (!built)
+        {
+            LOGF(eERROR, "Could not build the unit LODs");
+            return false;
+        }
+        for (uint32_t lod = 0; lod < UNIT_LOD_COUNT; ++lod)
+        {
+            gLodFirstIndex[lod] = lods.mFirstIndex[lod];
+            gLodIndexCount[lod] = lods.mIndexCount[lod];
+            LOGF(eINFO, "Unit LOD%u: %u triangles", lod, lods.mIndexCount[lod] / 3);
+        }
+
+        BufferLoadDesc indexDesc = {};
+        indexDesc.mDesc.mDescriptors = DESCRIPTOR_TYPE_INDEX_BUFFER;
+        indexDesc.mDesc.mMemoryUsage = RESOURCE_MEMORY_USAGE_GPU_ONLY;
+        indexDesc.mDesc.mStartState = RESOURCE_STATE_INDEX_BUFFER;
+        indexDesc.mDesc.mSize = sizeof(uint32_t) * lods.mTotalIndexCount;
+        indexDesc.mDesc.pName = "Unit LOD indices";
+        indexDesc.pData = lods.pIndices;
+        indexDesc.ppBuffer = &pUnitLodIndexBuffer;
+        addResource(&indexDesc, NULL);
+        waitForAllResourceLoads();
+        freeUnitLods(&lods);
+        return true;
     }
 
     void Draw()
@@ -596,14 +836,29 @@ ab_zoom; buttonanalog; MOUSE_WHEEL_DOWN; 1.0f; MOUSE_WHEEL_UP; -1.0f)");
         }
 
         uint32_t swapchainImageIndex;
-        acquireNextImage(pRenderer, pSwapChain, pImageAcquiredSemaphore, NULL, &swapchainImageIndex);
+        acquireNextImage(pRenderer, pSwapChain, pImageAcquiredSemaphore[gFrameIndex], NULL, &swapchainImageIndex);
 
         GpuCmdRingElement elem = getNextGpuCmdRingElement(&gGraphicsCmdRing, true, 1);
-        FenceStatus       fenceStatus;
+        FenceStatus       fenceStatus = {};
         getFenceStatus(pRenderer, elem.pFence, &fenceStatus);
         if (fenceStatus == FENCE_STATUS_INCOMPLETE)
             waitForFences(pRenderer, 1, &elem.pFence);
         resetCmdPool(pRenderer, elem.pCmdPool);
+
+        // This frame slot's GPU work is finished: read how many units its unit draw drew.
+        QueryPool* pStatsPool = pUnitStatsQueryPool[gFrameIndex];
+        if (pStatsPool)
+        {
+            QueryData stats = {};
+            getQueryData(pRenderer, pStatsPool, 0, &stats);
+            if (stats.mValid)
+            {
+                gGpuTriangles = stats.mPipelineStats.mIAPrimitives;
+                gGpuCpuMismatch = (int64_t)gGpuTriangles - (int64_t)gCpuTriangles[gFrameIndex];
+            }
+            // The reference is only needed while measuring; it costs a pass over every unit.
+            gCpuTriangles[gFrameIndex] = gStressMode ? cullOnCpu(gCpuLodUnits) : 0;
+        }
 
         // Upload this frame's data (after the fence, so the GPU is done with these buffers).
         BufferUpdateDesc frameUpdate = { pFrameUniformBuffers[gFrameIndex] };
@@ -632,6 +887,11 @@ ab_zoom; buttonanalog; MOUSE_WHEEL_DOWN; 1.0f; MOUSE_WHEEL_UP; -1.0f)");
         Cmd*          cmd = elem.pCmds[0];
         beginCmd(cmd);
         cmdBeginGpuFrameProfile(cmd, gGpuProfileToken);
+        if (pStatsPool)
+            cmdResetQuery(cmd, pStatsPool, 0, 1);
+
+        if (gRenderData.mUnitCount > 0)
+            cmdCullUnits(cmd);
 
         RenderTargetBarrier barriers[] = { { pRenderTarget, RESOURCE_STATE_PRESENT, RESOURCE_STATE_RENDER_TARGET } };
         cmdResourceBarrier(cmd, 0, NULL, 0, NULL, 1, barriers);
@@ -658,8 +918,18 @@ ab_zoom; buttonanalog; MOUSE_WHEEL_DOWN; 1.0f; MOUSE_WHEEL_UP; -1.0f)");
             cmdBindDescriptorSet(cmd, 0, pSetPersistent);
             cmdBindDescriptorSet(cmd, gFrameIndex, pSetPerFrame);
             cmdBindVertexBuffer(cmd, 1, &pUnitGeom->pVertexBuffers[0], pUnitGeom->mVertexStrides, (uint64_t*)NULL);
-            cmdBindIndexBuffer(cmd, pUnitGeom->pIndexBuffer, pUnitGeom->mIndexType, (uint64_t)NULL);
-            cmdDrawIndexedInstanced(cmd, pUnitGeom->mIndexCount, 0, gRenderData.mUnitCount, 0, 0);
+            cmdBindIndexBuffer(cmd, pUnitLodIndexBuffer, INDEX_TYPE_UINT32, (uint64_t)NULL);
+            QueryDesc query = { 0 };
+            if (pStatsPool)
+                cmdBeginQuery(cmd, pStatsPool, &query);
+            // One draw per LOD; set `lod` points the vertex shader at that LOD's visible list.
+            for (uint32_t lod = 0; lod < UNIT_LOD_COUNT; ++lod)
+            {
+                cmdBindDescriptorSet(cmd, lod, pSetUnitsPerBatch);
+                cmdExecuteIndirect(cmd, INDIRECT_DRAW_INDEX, 1, pUnitDrawArgsBuffer, lod * UNIT_DRAW_ARG_COUNT * sizeof(uint32_t), NULL, 0);
+            }
+            if (pStatsPool)
+                cmdEndQuery(cmd, pStatsPool, &query);
             cmdEndDebugMarker(cmd);
         }
 
@@ -699,13 +969,22 @@ ab_zoom; buttonanalog; MOUSE_WHEEL_DOWN; 1.0f; MOUSE_WHEEL_UP; -1.0f)");
 
         barriers[0] = { pRenderTarget, RESOURCE_STATE_RENDER_TARGET, RESOURCE_STATE_PRESENT };
         cmdResourceBarrier(cmd, 0, NULL, 0, NULL, 1, barriers);
+        if (gRenderData.mUnitCount > 0)
+        {
+            // Back to writable for the next frame's cull pass.
+            BufferBarrier toWrite[] = { { pVisibleUnitsBuffer, RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, RESOURCE_STATE_UNORDERED_ACCESS },
+                                          { pUnitDrawArgsBuffer, RESOURCE_STATE_INDIRECT_ARGUMENT, RESOURCE_STATE_UNORDERED_ACCESS } };
+            cmdResourceBarrier(cmd, TF_ARRAY_COUNT(toWrite), toWrite, 0, NULL, 0, NULL);
+        }
+        if (pStatsPool)
+            cmdResolveQuery(cmd, pStatsPool, 0, 1);
         cmdEndGpuFrameProfile(cmd, gGpuProfileToken);
         endCmd(cmd);
 
         FlushResourceUpdateDesc flushUpdateDesc = {};
         flushUpdateDesc.mNodeIndex = 0;
         flushResourceUpdates(&flushUpdateDesc);
-        Semaphore* waitSemaphores[2] = { flushUpdateDesc.pOutSubmittedSemaphore, pImageAcquiredSemaphore };
+        Semaphore* waitSemaphores[2] = { flushUpdateDesc.pOutSubmittedSemaphore, pImageAcquiredSemaphore[gFrameIndex] };
 
         QueueSubmitDesc submitDesc = {};
         submitDesc.mCmdCount = 1;
@@ -729,7 +1008,32 @@ ab_zoom; buttonanalog; MOUSE_WHEEL_DOWN; 1.0f; MOUSE_WHEEL_UP; -1.0f)");
         gFrameIndex = (gFrameIndex + 1) % gDataBufferCount;
     }
 
-    const char* GetName() { return "40_AutoBattler"; }
+    // Resets the draw arguments, then culls every unit into the visible list on the GPU.
+    void cmdCullUnits(Cmd* cmd)
+    {
+        const ProfileToken cullToken = cmdBeginGpuTimestampQuery(cmd, gGpuProfileToken, "Cull units");
+        cmdBindPipeline(cmd, pCullClearPipeline);
+        cmdBindDescriptorSet(cmd, 0, pSetPersistent);
+        cmdBindDescriptorSet(cmd, gFrameIndex, pSetPerFrame);
+        cmdBindDescriptorSet(cmd, 0, pSetCullPerBatch);
+        cmdDispatch(cmd, 1, 1, 1);
+
+        BufferBarrier clearDone = { pUnitDrawArgsBuffer, RESOURCE_STATE_UNORDERED_ACCESS, RESOURCE_STATE_UNORDERED_ACCESS };
+        cmdResourceBarrier(cmd, 1, &clearDone, 0, NULL, 0, NULL);
+
+        cmdBindPipeline(cmd, pCullPipeline);
+        cmdBindDescriptorSet(cmd, 0, pSetPersistent);
+        cmdBindDescriptorSet(cmd, gFrameIndex, pSetPerFrame);
+        cmdBindDescriptorSet(cmd, 0, pSetCullPerBatch);
+        cmdDispatch(cmd, (gRenderData.mUnitCount + CULL_GROUP_SIZE - 1) / CULL_GROUP_SIZE, 1, 1);
+
+        BufferBarrier toDraw[] = { { pVisibleUnitsBuffer, RESOURCE_STATE_UNORDERED_ACCESS, RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
+                                     { pUnitDrawArgsBuffer, RESOURCE_STATE_UNORDERED_ACCESS, RESOURCE_STATE_INDIRECT_ARGUMENT } };
+        cmdResourceBarrier(cmd, TF_ARRAY_COUNT(toDraw), toDraw, 0, NULL, 0, NULL);
+        cmdEndGpuTimestampQuery(cmd, cullToken);
+    }
+
+    const char* GetName() { return "AutoBattler"; }
 
     bool addSwapChain()
     {
@@ -784,6 +1088,12 @@ ab_zoom; buttonanalog; MOUSE_WHEEL_DOWN; 1.0f; MOUSE_WHEEL_UP; -1.0f)");
         billboardShader.mVert.pFileName = "billboard.vert";
         billboardShader.mFrag.pFileName = "billboard.frag";
         addShader(pRenderer, &billboardShader, &pBillboardShader);
+
+        ShaderLoadDesc cullShader = {};
+        cullShader.mComp.pFileName = "cullclear.comp";
+        addShader(pRenderer, &cullShader, &pCullClearShader);
+        cullShader.mComp.pFileName = "cull.comp";
+        addShader(pRenderer, &cullShader, &pCullShader);
     }
 
     void removeShaders()
@@ -791,6 +1101,8 @@ ab_zoom; buttonanalog; MOUSE_WHEEL_DOWN; 1.0f; MOUSE_WHEEL_UP; -1.0f)");
         removeShader(pRenderer, pUnitShader);
         removeShader(pRenderer, pGroundShader);
         removeShader(pRenderer, pBillboardShader);
+        removeShader(pRenderer, pCullClearShader);
+        removeShader(pRenderer, pCullShader);
     }
 
     void addDescriptorSets()
@@ -799,12 +1111,18 @@ ab_zoom; buttonanalog; MOUSE_WHEEL_DOWN; 1.0f; MOUSE_WHEEL_UP; -1.0f)");
         addDescriptorSet(pRenderer, &setDesc, &pSetPersistent);
         setDesc = SRT_SET_DESC(SrtData, PerFrame, gDataBufferCount, 0);
         addDescriptorSet(pRenderer, &setDesc, &pSetPerFrame);
+        setDesc = SRT_SET_DESC(SrtData, PerBatch, UNIT_LOD_COUNT, 0);
+        addDescriptorSet(pRenderer, &setDesc, &pSetUnitsPerBatch);
+        setDesc = SRT_SET_DESC(CullSrtData, PerBatch, 1, 0);
+        addDescriptorSet(pRenderer, &setDesc, &pSetCullPerBatch);
     }
 
     void removeDescriptorSets()
     {
         removeDescriptorSet(pRenderer, pSetPersistent);
         removeDescriptorSet(pRenderer, pSetPerFrame);
+        removeDescriptorSet(pRenderer, pSetUnitsPerBatch);
+        removeDescriptorSet(pRenderer, pSetCullPerBatch);
     }
 
     void prepareDescriptorSets()
@@ -829,6 +1147,24 @@ ab_zoom; buttonanalog; MOUSE_WHEEL_DOWN; 1.0f; MOUSE_WHEEL_UP; -1.0f)");
             perFrame[2].ppBuffers = &pBillboardBuffers[i];
             updateDescriptorSet(pRenderer, i, pSetPerFrame, 3, perFrame);
         }
+
+        for (uint32_t lod = 0; lod < UNIT_LOD_COUNT; ++lod)
+        {
+            DescriptorDataRange range = { lod * gUnitCapacity * (uint32_t)sizeof(uint32_t), gUnitCapacity * (uint32_t)sizeof(uint32_t),
+                                            (uint32_t)sizeof(uint32_t) };
+            DescriptorData      units = {};
+            units.mIndex = SRT_RES_IDX(SrtData, PerBatch, gVisibleUnits);
+            units.ppBuffers = &pVisibleUnitsBuffer;
+            units.pRanges = &range;
+            updateDescriptorSet(pRenderer, lod, pSetUnitsPerBatch, 1, &units);
+        }
+
+        DescriptorData cull[2] = {};
+        cull[0].mIndex = SRT_RES_IDX(CullSrtData, PerBatch, gVisibleUnitsRW);
+        cull[0].ppBuffers = &pVisibleUnitsBuffer;
+        cull[1].mIndex = SRT_RES_IDX(CullSrtData, PerBatch, gUnitDrawArgsRW);
+        cull[1].ppBuffers = &pUnitDrawArgsBuffer;
+        updateDescriptorSet(pRenderer, 0, pSetCullPerBatch, 2, cull);
     }
 
     void addPipelines()
@@ -863,10 +1199,22 @@ ab_zoom; buttonanalog; MOUSE_WHEEL_DOWN; 1.0f; MOUSE_WHEEL_UP; -1.0f)");
         pipelineSettings.pShaderProgram = pBillboardShader;
         addPipeline(pRenderer, &desc, &pBillboardPipeline);
 
-        pipelineSettings.pRasterizerState = &cullFront;
-        pipelineSettings.pVertexLayout = &gUnitVertexLayout;
-        pipelineSettings.pShaderProgram = pUnitShader;
-        addPipeline(pRenderer, &desc, &pUnitPipeline);
+        PipelineDesc unitDesc = desc;
+        PIPELINE_LAYOUT_DESC(unitDesc, SRT_LAYOUT_DESC(SrtData, Persistent), SRT_LAYOUT_DESC(SrtData, PerFrame),
+                             SRT_LAYOUT_DESC(SrtData, PerBatch), NULL);
+        unitDesc.mGraphicsDesc.pRasterizerState = &cullFront;
+        unitDesc.mGraphicsDesc.pVertexLayout = &gUnitVertexLayout;
+        unitDesc.mGraphicsDesc.pShaderProgram = pUnitShader;
+        addPipeline(pRenderer, &unitDesc, &pUnitPipeline);
+
+        PipelineDesc cullDesc = {};
+        cullDesc.mType = PIPELINE_TYPE_COMPUTE;
+        PIPELINE_LAYOUT_DESC(cullDesc, SRT_LAYOUT_DESC(CullSrtData, Persistent), SRT_LAYOUT_DESC(CullSrtData, PerFrame),
+                             SRT_LAYOUT_DESC(CullSrtData, PerBatch), NULL);
+        cullDesc.mComputeDesc.pShaderProgram = pCullClearShader;
+        addPipeline(pRenderer, &cullDesc, &pCullClearPipeline);
+        cullDesc.mComputeDesc.pShaderProgram = pCullShader;
+        addPipeline(pRenderer, &cullDesc, &pCullPipeline);
     }
 
     void removePipelines()
@@ -874,6 +1222,8 @@ ab_zoom; buttonanalog; MOUSE_WHEEL_DOWN; 1.0f; MOUSE_WHEEL_UP; -1.0f)");
         removePipeline(pRenderer, pUnitPipeline);
         removePipeline(pRenderer, pGroundPipeline);
         removePipeline(pRenderer, pBillboardPipeline);
+        removePipeline(pRenderer, pCullClearPipeline);
+        removePipeline(pRenderer, pCullPipeline);
     }
 };
 

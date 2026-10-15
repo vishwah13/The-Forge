@@ -1,12 +1,14 @@
 #include "AutoBattlerSim.h"
+#include "UnitCulling.h"
+#include "UnitLod.h"
 
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
 
-#include "../../../../Common_3/Utilities/Interfaces/IFileSystem.h"
+#include "../../../Common_3/Utilities/Interfaces/IFileSystem.h"
 
-#include "../../../../Common_3/Utilities/Interfaces/IMemory.h"
+#include "../../../Common_3/Utilities/Interfaces/IMemory.h"
 
 struct TestContext
 {
@@ -345,11 +347,11 @@ static void testThreadCountDoesNotChangeOutcome(TestContext* pCtx)
     CHECK(single.mPlayerHp == multi.mPlayerHp);
 }
 
-static RenderData allocRenderData()
+static RenderData allocRenderData(uint32_t unitCapacity = MAX_UNITS)
 {
     RenderData data = {};
-    data.pUnits = (UnitInstance*)tf_malloc(sizeof(UnitInstance) * MAX_UNITS);
-    data.pBillboards = (BillboardInstance*)tf_malloc(sizeof(BillboardInstance) * MAX_BILLBOARDS);
+    data.pUnits = (UnitInstance*)tf_malloc(sizeof(UnitInstance) * unitCapacity);
+    data.pBillboards = (BillboardInstance*)tf_malloc(sizeof(BillboardInstance) * (unitCapacity + MAX_PROJECTILES));
     return data;
 }
 
@@ -375,8 +377,8 @@ static void testRenderDataPrep(TestContext* pCtx)
     bool     noFlash = true;
     for (uint32_t i = 0; i < data.mUnitCount; ++i)
     {
-        const Vector4 t = data.pUnits[i].mWorld.getCol3();
-        onGround = onGround && t.getY() == 0.0f && t.getX() > 0.0f && t.getX() < ARENA_SIZE && t.getZ() > 0.0f && t.getZ() < ARENA_SIZE;
+        const float4 t = v4ToF4(data.pUnits[i].mWorld[3]);
+        onGround = onGround && t.y == 0.0f && t.x > 0.0f && t.x < ARENA_SIZE && t.z > 0.0f && t.z < ARENA_SIZE;
         if (data.pUnits[i].mColor.z > data.pUnits[i].mColor.x)
             ++blue;
         noFlash = noFlash && data.pUnits[i].mColor.w == 0.0f;
@@ -391,7 +393,7 @@ static void testRenderDataPrep(TestContext* pCtx)
     {
         const float expected = UNIT_MODEL_SCALE * (data.pUnits[i].mColor.z > data.pUnits[i].mColor.x ? gUnitStats[UNIT_MELEE].mScale
                                                                                                        : gUnitStats[UNIT_TANK].mScale);
-        scaled = scaled && fabsf(length(data.pUnits[i].mWorld.getCol0().getXYZ()) - expected) < 1e-4f;
+        scaled = scaled && fabsf((float)length(data.pUnits[i].mWorld[0].getXYZ()) - expected) < 1e-4f;
     }
     CHECK(scaled);
     freeRenderData(&data);
@@ -479,6 +481,224 @@ static void testAnimationState(TestContext* pCtx)
     simDestroy(s);
 }
 
+static bool allInsideWorld(const RenderData& data, float worldSize, float* pMaxX)
+{
+    bool inside = true;
+    *pMaxX = 0.0f;
+    for (uint32_t i = 0; i < data.mUnitCount; ++i)
+    {
+        const float4 t = v4ToF4(data.pUnits[i].mWorld[3]);
+        inside = inside && t.x > 0.0f && t.x < worldSize && t.z > 0.0f && t.z < worldSize;
+        *pMaxX = t.x > *pMaxX ? t.x : *pMaxX;
+    }
+    return inside;
+}
+
+static void testStressSetup(TestContext* pCtx)
+{
+    const uint32_t perTeam = 4096;
+    BattleSim*     s = simCreate(1, 2 * perTeam);
+    CHECK(simGetUnitCapacity(s) == 2 * perTeam);
+    CHECK(simGetWorldSize(s) == ARENA_SIZE);
+    CHECK(!simStressSetup(s, perTeam + 1)); // over capacity
+    CHECK(simGetPhase(s) == PHASE_PREP);
+
+    CHECK(simStressSetup(s, perTeam));
+    CHECK(simGetPhase(s) == PHASE_BATTLE);
+    CHECK(simGetUnitCount(s, TEAM_PLAYER) == perTeam && simGetUnitCount(s, TEAM_ENEMY) == perTeam);
+    const float world = simGetWorldSize(s);
+    CHECK(world > ARENA_SIZE);                              // 8k units do not fit the 80 m arena at normal spacing
+    CHECK(simTestMinUnitDistance(s, TEAM_PLAYER) >= 0.99f); // same 1 m spacing as a melee squad
+
+    RenderData data = allocRenderData(2 * perTeam);
+    float      maxX = 0.0f;
+    simFillRenderData(s, &data);
+    CHECK(data.mUnitCount == 2 * perTeam);
+    CHECK(allInsideWorld(data, world, &maxX));
+    CHECK(maxX > ARENA_SIZE);
+
+    // Units move freely on the bigger world instead of being clamped to the arena.
+    stepFor(s, 0.5f);
+    CHECK(simGetPhase(s) == PHASE_BATTLE);
+    CHECK(simTestAllPositionsFinite(s));
+    simFillRenderData(s, &data);
+    CHECK(allInsideWorld(data, world, &maxX));
+    CHECK(maxX > ARENA_SIZE);
+
+    // Restart returns to the normal game on the 80 m arena.
+    simRestart(s);
+    CHECK(simGetWorldSize(s) == ARENA_SIZE);
+    CHECK(simGetPhase(s) == PHASE_PREP && simGetUnitCount(s, TEAM_PLAYER) == 0u);
+    CHECK(simBuySquad(s, 0, 0, UNIT_MELEE) && simStartBattle(s));
+    freeRenderData(&data);
+    simDestroy(s);
+}
+
+// A unit whose bounding sphere centre is at (x, y, z) in world space.
+static mat4 unitAt(float x, float y, float z, float scale)
+{
+    return mat4::translation(vec3(x, y - UNIT_BOUND_CENTER_Y * scale, z)) * mat4::scale(vec3(scale));
+}
+
+static void testUnitCulling(TestContext* pCtx)
+{
+    // Camera at z = -50 looking down +z, so a point's depth is z + 50 and the right frustum edge at
+    // depth d is x = d * tan(fovX / 2). Same projection as the app.
+    const float zNear = 0.5f;
+    const float zFar = 2000.0f;
+    const float tanHalfX = tanf(PI / 6.0f);
+    const float aspectInverse = 9.0f / 16.0f;
+    const mat4  view = mat4::lookAtLH(Point3(0.0f, 0.0f, -50.0f), Point3(0.0f, 0.0f, 0.0f), vec3(0.0f, 1.0f, 0.0f));
+    const mat4  proj = mat4::perspectiveLH_ReverseZ(PI / 3.0f, aspectInverse, zNear, zFar);
+    float4      planes[6];
+    frustumPlanesFromViewProj(proj * view, planes);
+
+    const float s = 0.5f;                     // melee instance scale
+    const float r = UNIT_BOUND_RADIUS * s;    // 1.3 m world radius
+    const float edgeX = 50.0f * tanHalfX;     // right edge at z = 0
+    const float edgeY = edgeX * aspectInverse; // top edge at z = 0
+    const float c30 = cosf(PI / 6.0f);        // a sphere at edge + o is o * c30 from the side plane
+    CHECK(r > 1.0f * c30 && r < 2.0f * c30);  // so +1 m straddles the edge and +2 m is fully outside
+
+    CHECK(unitInFrustum(planes, unitAt(0.0f, 0.0f, 0.0f, s)));
+    CHECK(unitInFrustum(planes, unitAt(edgeX + 1.0f, 0.0f, 0.0f, s)));   // straddles the right edge
+    CHECK(!unitInFrustum(planes, unitAt(edgeX + 2.0f, 0.0f, 0.0f, s)));  // right of it
+    CHECK(unitInFrustum(planes, unitAt(-edgeX - 1.0f, 0.0f, 0.0f, s)));  // straddles the left edge
+    CHECK(!unitInFrustum(planes, unitAt(-edgeX - 2.0f, 0.0f, 0.0f, s))); // left of it
+    CHECK(!unitInFrustum(planes, unitAt(0.0f, edgeY + 2.0f / cosf(atanf(tanHalfX * aspectInverse)), 0.0f, s))); // above
+    CHECK(!unitInFrustum(planes, unitAt(0.0f, -edgeY - 2.0f / cosf(atanf(tanHalfX * aspectInverse)), 0.0f, s))); // below
+    CHECK(!unitInFrustum(planes, unitAt(0.0f, 0.0f, -60.0f, s)));                       // behind the camera
+    CHECK(unitInFrustum(planes, unitAt(0.0f, 0.0f, -50.0f + zNear - 1.0f, s)));          // straddles the near plane
+    // The reverse-Z matrix stores depth as 1 - f/(f-n) in floats, which places the far plane up to ~1 m
+    // off at 2 km (the GPU clips with the same matrix), so these two use wider margins.
+    CHECK(unitInFrustum(planes, unitAt(0.0f, 0.0f, -50.0f + zFar + 0.3f, s)));           // straddles the far plane
+    CHECK(!unitInFrustum(planes, unitAt(0.0f, 0.0f, -50.0f + zFar + 3.0f, s)));          // beyond it
+    CHECK(unitInFrustum(planes, unitAt(edgeX + 2.0f, 0.0f, 0.0f, 1.0f)));               // a bigger unit still reaches in
+}
+
+static void testUnitLodSelection(TestContext* pCtx)
+{
+    // Same camera as testUnitCulling: at z = -50 looking down +z.
+    const float3 eye(0.0f, 0.0f, -50.0f);
+    const mat4   view = mat4::lookAtLH(Point3(f3Tov3(eye)), Point3(0.0f, 0.0f, 0.0f), vec3(0.0f, 1.0f, 0.0f));
+    const mat4   proj = mat4::perspectiveLH_ReverseZ(PI / 3.0f, 9.0f / 16.0f, 0.5f, 2000.0f);
+    float4       planes[6];
+    frustumPlanesFromViewProj(proj * view, planes);
+
+    const float s = 0.5f;
+    const float r = UNIT_BOUND_RADIUS * s;
+    CHECK(unitLod(planes, eye, unitAt(0.0f, 0.0f, eye.z + 10.0f * r, s)) == 0);
+    CHECK(unitLod(planes, eye, unitAt(0.0f, 0.0f, eye.z + (UNIT_LOD_DISTANCES[0] - 1.0f) * r, s)) == 0);
+    CHECK(unitLod(planes, eye, unitAt(0.0f, 0.0f, eye.z + (UNIT_LOD_DISTANCES[0] + 1.0f) * r, s)) == 1);
+    CHECK(unitLod(planes, eye, unitAt(0.0f, 0.0f, eye.z + (UNIT_LOD_DISTANCES[1] - 1.0f) * r, s)) == 1);
+    CHECK(unitLod(planes, eye, unitAt(0.0f, 0.0f, eye.z + (UNIT_LOD_DISTANCES[1] + 1.0f) * r, s)) == 2);
+    CHECK(unitLod(planes, eye, unitAt(0.0f, 0.0f, eye.z + 1000.0f, s)) == 2);
+    CHECK(unitLod(planes, eye, unitAt(0.0f, 0.0f, eye.z - 10.0f, s)) == -1); // behind the camera
+    // Distances are in bounding radii, so a bigger unit keeps detail further out.
+    CHECK(unitLod(planes, eye, unitAt(0.0f, 0.0f, eye.z + (UNIT_LOD_DISTANCES[0] + 1.0f) * r, 2.0f * s)) == 0);
+}
+
+// UV sphere with a duplicated seam column, like a textured mesh.
+static void makeSphere(uint32_t rings, uint32_t segments, float** ppPositions, uint32_t** ppIndices, uint32_t* pVertexCount,
+                       uint32_t* pIndexCount)
+{
+    *pVertexCount = (rings + 1) * (segments + 1);
+    *pIndexCount = rings * segments * 6;
+    float*    positions = (float*)tf_malloc(sizeof(float) * 3 * *pVertexCount);
+    uint32_t* indices = (uint32_t*)tf_malloc(sizeof(uint32_t) * *pIndexCount);
+    for (uint32_t ring = 0; ring <= rings; ++ring)
+        for (uint32_t seg = 0; seg <= segments; ++seg)
+        {
+            const float theta = PI * (float)ring / (float)rings;
+            const float phi = 2.0f * PI * (float)seg / (float)segments;
+            float*      p = &positions[3 * (ring * (segments + 1) + seg)];
+            p[0] = sinf(theta) * cosf(phi);
+            p[1] = cosf(theta);
+            p[2] = sinf(theta) * sinf(phi);
+        }
+    uint32_t n = 0;
+    for (uint32_t ring = 0; ring < rings; ++ring)
+        for (uint32_t seg = 0; seg < segments; ++seg)
+        {
+            const uint32_t a = ring * (segments + 1) + seg;
+            const uint32_t b = a + segments + 1;
+            const uint32_t quad[6] = { a, b, a + 1, a + 1, b, b + 1 };
+            for (uint32_t k = 0; k < 6; ++k)
+                indices[n++] = quad[k];
+        }
+    *ppPositions = positions;
+    *ppIndices = indices;
+}
+
+static void testUnitLodBuild(TestContext* pCtx)
+{
+    float*    positions = NULL;
+    uint32_t* indices = NULL;
+    uint32_t  vertexCount = 0;
+    uint32_t  indexCount = 0;
+    makeSphere(48, 96, &positions, &indices, &vertexCount, &indexCount);
+
+    UnitLods lods = {};
+    CHECK(!buildUnitLods(indices, 0, positions, vertexCount, 3 * sizeof(float), &lods)); // nothing to simplify
+    CHECK(buildUnitLods(indices, indexCount, positions, vertexCount, 3 * sizeof(float), &lods));
+
+    // LOD0 is the mesh unchanged; each further level is a clearly smaller, non-empty triangle list.
+    CHECK(lods.mFirstIndex[0] == 0 && lods.mIndexCount[0] == indexCount);
+    CHECK(lods.pIndices && memcmp(lods.pIndices, indices, sizeof(uint32_t) * indexCount) == 0);
+    CHECK(lods.mIndexCount[1] > 0 && lods.mIndexCount[1] * 2 < lods.mIndexCount[0]);
+    CHECK(lods.mIndexCount[2] > 0 && lods.mIndexCount[2] * 2 < lods.mIndexCount[1]);
+
+    // Levels are packed back to back, whole triangles, and only reference the shared vertices.
+    bool     packed = true;
+    uint32_t total = 0;
+    for (uint32_t lod = 0; lod < UNIT_LOD_COUNT; ++lod)
+    {
+        packed = packed && lods.mFirstIndex[lod] == total && lods.mIndexCount[lod] % 3 == 0;
+        total += lods.mIndexCount[lod];
+    }
+    CHECK(packed && lods.mTotalIndexCount == total);
+    bool inRange = true;
+    for (uint32_t i = 0; i < lods.mTotalIndexCount; ++i)
+        inRange = inRange && lods.pIndices[i] < vertexCount;
+    CHECK(inRange);
+
+    freeUnitLods(&lods);
+    CHECK(lods.pIndices == NULL);
+    tf_free(positions);
+    tf_free(indices);
+}
+
+static void testNearestEnemySearch(TestContext* pCtx)
+{
+    // Two 4,096-unit armies 10 m apart, 46 rows deep: back-row units are far from any enemy.
+    BattleSim* s = simCreate(1, 8192);
+    CHECK(simStressSetup(s, 4096));
+    SimSearchStats stats = simTestNearestEnemySearch(s);
+    CHECK(stats.mSearches == 8192u);
+    CHECK(stats.mMismatches == 0u);
+    // Searching only the rings that can hold an enemy keeps the work near the front.
+    CHECK(stats.mAverageBucketsVisited < 300.0f);
+    char line[96];
+    snprintf(line, sizeof(line), "  average buckets visited per search: %.1f", stats.mAverageBucketsVisited);
+    writeLine(pCtx, line);
+
+    // Scattered units, so searches start at many different distances from the enemy.
+    simTestClearBoard(s);
+    uint32_t state = 12345u;
+    for (uint32_t i = 0; i < 600; ++i)
+    {
+        state = state * 1664525u + 1013904223u;
+        const float x = 1.0f + (float)((state >> 8) % 7800u) / 100.0f;
+        state = state * 1664525u + 1013904223u;
+        const float z = 1.0f + (float)((state >> 8) % 7800u) / 100.0f;
+        simTestSpawnUnit(s, i % 7 == 0 ? TEAM_ENEMY : TEAM_PLAYER, UNIT_MELEE, x, z);
+    }
+    stats = simTestNearestEnemySearch(s);
+    CHECK(stats.mSearches == 600u);
+    CHECK(stats.mMismatches == 0u);
+    simDestroy(s);
+}
+
 typedef void (*TestFn)(TestContext*);
 
 struct NamedTest
@@ -510,6 +730,11 @@ int runAutoBattlerSelfTest(const char* pResultFileName)
         { "render data in prep", testRenderDataPrep },
         { "render data in battle", testRenderDataBattle },
         { "animation state", testAnimationState },
+        { "stress setup", testStressSetup },
+        { "unit culling", testUnitCulling },
+        { "unit LOD selection", testUnitLodSelection },
+        { "unit LOD build", testUnitLodBuild },
+        { "nearest enemy search", testNearestEnemySearch },
     };
     for (uint32_t i = 0; i < sizeof(tests) / sizeof(tests[0]); ++i)
     {

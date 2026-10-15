@@ -1,4 +1,4 @@
-#include "../../../../../../Common_3/Graphics/FSL/defaults.h"
+#include "../../../../../Common_3/Graphics/FSL/defaults.h"
 
 #rootsig default.rootsig
 #end
@@ -28,4 +28,12 @@
 
 #frag billboard.frag
 #include "Billboard.frag.fsl"
+#end
+
+#comp cullclear.comp
+#include "CullClear.comp.fsl"
+#end
+
+#comp cull.comp
+#include "Cull.comp.fsl"
 #end

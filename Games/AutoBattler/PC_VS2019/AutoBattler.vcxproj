@@ -86,6 +86,7 @@
     <PostBuildEvent>
       <Command>
         %(Command)
+        xcopy /Y /D "$(ProjectDir)..\src\GPUCfg\gpu.cfg" "$(OutDir)"
       </Command>
     </PostBuildEvent>
     <FSLShader>
@@ -128,6 +129,7 @@
     <PostBuildEvent>
       <Command>
         %(Command)
+        xcopy /Y /D "$(ProjectDir)..\src\GPUCfg\gpu.cfg" "$(OutDir)"
       </Command>
     </PostBuildEvent>
     <FSLShader>

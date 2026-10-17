@@ -34,6 +34,15 @@ STRUCT(UnitInstance)
 };
 #define UNIT_POSE_OFFSET_MASK 0xffffffu // must match UNIT_POSE_OFFSET_BITS in UnitInstance.h
 
+STRUCT(SkinJoint) // must match SkinJoint in AnimationBake.h
+{
+    DATA(float4x4, inverseBind, None);
+    DATA(uint, rigJoint, None);
+    DATA(uint, pad0, None);
+    DATA(uint, pad1, None);
+    DATA(uint, pad2, None);
+};
+
 STRUCT(BillboardInstance)
 {
     DATA(float4, centerHalfWidth, None);

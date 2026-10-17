@@ -3,7 +3,8 @@
     BEGIN_SRT_SET(Persistent)
         DECL_TEXTURE(Persistent, Tex2D(float4), gUnitTexture)
         DECL_TEXTURE(Persistent, Tex2D(float4), gGroundTexture)
-        DECL_BUFFER(Persistent, Buffer(float4x4), gBonePalettes)
+        DECL_BUFFER(Persistent, Buffer(float4x4), gBonePalettes) // rig joint poses, every baked frame
+        DECL_BUFFER(Persistent, Buffer(SkinJoint), gSkinJoints)  // per unit mesh joint
     END_SRT_SET(Persistent)
     BEGIN_SRT_SET(PerFrame)
         DECL_CBUFFER(PerFrame, CBUFFER(FrameUniforms), gFrame)

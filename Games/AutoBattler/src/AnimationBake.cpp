@@ -60,16 +60,10 @@ struct ClipSampler
     }
 };
 
-static void writePalette(const GeometryData* pGeom, const Matrix4* pJointModel, mat4* pOut)
-{
-    for (uint32_t i = 0; i < pGeom->mJointCount; ++i)
-        pOut[i] = pJointModel[pGeom->pJointRemaps[i]] * pGeom->pInverseBindPoses[i];
-}
-
-bool bakeAnimations(Rig* pRig, const GeometryData* pGeom, const char* const pClipFiles[ANIM_CLIP_COUNT], BakedAnimations* pOut)
+bool bakeAnimations(Rig* pRig, const char* const pClipFiles[ANIM_CLIP_COUNT], BakedAnimations* pOut)
 {
     memset(pOut, 0, sizeof(*pOut));
-    pOut->mJointCount = pGeom->mJointCount;
+    pOut->mJointCount = pRig->mNumJoints;
 
     ClipSampler samplers[ANIM_CLIP_COUNT];
     for (uint32_t c = 0; c < ANIM_CLIP_COUNT; ++c)
@@ -85,7 +79,12 @@ bool bakeAnimations(Rig* pRig, const GeometryData* pGeom, const char* const pCli
     {
         const BakedClip& clip = pOut->mClips[c];
         for (uint32_t f = 0; f < clip.mFrameCount; ++f)
-            writePalette(pGeom, samplers[c].sample((float)f / BAKE_FPS), &pOut->pPalettes[(clip.mFirstFrame + f) * pOut->mJointCount]);
+        {
+            const Matrix4* pJointModel = samplers[c].sample((float)f / BAKE_FPS);
+            mat4*          pDst = &pOut->pPalettes[(clip.mFirstFrame + f) * pOut->mJointCount];
+            for (uint32_t j = 0; j < pOut->mJointCount; ++j)
+                pDst[j] = pJointModel[j];
+        }
         LOGF(eINFO, "AnimationBake: %s baked %u frames", pClipFiles[c], clip.mFrameCount);
     }
 
@@ -99,6 +98,26 @@ bool bakeAnimations(Rig* pRig, const GeometryData* pGeom, const char* const pCli
     for (uint32_t c = 0; c < ANIM_CLIP_COUNT; ++c)
         samplers[c].exit();
     return ok;
+}
+
+bool buildSkinJoints(const GeometryData* pGeom, uint32_t rigJointCount, SkinJoint** ppOut, uint32_t* pCount)
+{
+    SkinJoint* pSkin = (SkinJoint*)tf_memalign(16, sizeof(SkinJoint) * pGeom->mJointCount);
+    for (uint32_t i = 0; i < pGeom->mJointCount; ++i)
+    {
+        if (pGeom->pJointRemaps[i] >= rigJointCount)
+        {
+            LOGF(eERROR, "AnimationBake: mesh joint %u maps to rig joint %u of %u", i, pGeom->pJointRemaps[i], rigJointCount);
+            tf_free(pSkin);
+            return false;
+        }
+        pSkin[i] = {};
+        pSkin[i].mInverseBind = pGeom->pInverseBindPoses[i];
+        pSkin[i].mRigJoint = pGeom->pJointRemaps[i];
+    }
+    *ppOut = pSkin;
+    *pCount = pGeom->mJointCount;
+    return true;
 }
 
 void freeBakedAnimations(BakedAnimations* pBaked)

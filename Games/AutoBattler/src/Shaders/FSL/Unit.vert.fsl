@@ -30,19 +30,27 @@ VSOutput VS_MAIN(VSInput In, SV_InstanceID(uint) instanceId)
     uint     unit = entry & ((1u << VISIBLE_LOD_SHIFT) - 1u);
     UnitInstance inst = gUnitInstances[unit];
     uint         palette = inst.pose & UNIT_POSE_OFFSET_MASK;
-    float4x4     boneTransform = gBonePalettes[palette + In.BoneIndices[0]] * In.BoneWeights[0];
-    boneTransform += gBonePalettes[palette + In.BoneIndices[1]] * In.BoneWeights[1];
-    boneTransform += gBonePalettes[palette + In.BoneIndices[2]] * In.BoneWeights[2];
-    boneTransform += gBonePalettes[palette + In.BoneIndices[3]] * In.BoneWeights[3];
+
+    // Each influence: mesh joint -> rig joint pose in the shared table, times this mesh's inverse bind.
+    float3 model = float3(0.0f, 0.0f, 0.0f);
+    float3 normal = float3(0.0f, 0.0f, 0.0f);
+    float3 normalIn = decodeDir(unpackUnorm2x16(In.Normal));
+    for (uint k = 0; k < 4; ++k)
+    {
+        SkinJoint skin = gSkinJoints[In.BoneIndices[k]];
+        float4x4  pose = gBonePalettes[palette + skin.rigJoint];
+        float4    bindPos = mul(skin.inverseBind, float4(In.Position, 1.0f));
+        float4    bindNormal = mul(skin.inverseBind, float4(normalIn, 0.0f));
+        model += In.BoneWeights[k] * mul(pose, bindPos).xyz;
+        normal += In.BoneWeights[k] * mul(pose, bindNormal).xyz;
+    }
 
     // World = translation(x, 0, z) * rotationY(yaw) * scale, as unitWorldMatrix() in UnitInstance.h.
     float  c = cos(inst.yaw);
     float  s = sin(inst.yaw);
-    float3 model = mul(boneTransform, float4(In.Position, 1.0f)).xyz;
     float3 worldPos = float3(inst.x + inst.scale * (c * model.x + s * model.z), inst.scale * model.y,
                              inst.z + inst.scale * (c * model.z - s * model.x));
     Out.Position = mul(gFrame.viewProj, float4(worldPos, 1.0f));
-    float3 normal = mul(boneTransform, float4(decodeDir(unpackUnorm2x16(In.Normal)), 0.0f)).xyz;
     Out.Normal = normalize(float3(c * normal.x + s * normal.z, normal.y, c * normal.z - s * normal.x));
     Out.UV = unpack2Floats(In.UV);
     Out.Color = float4(gFrame.teamColors[inst.tintFlash & 0xffu].rgb, float((inst.tintFlash >> 8) & 0xffu) / 255.0f);

@@ -1,3 +1,4 @@
+#include "AnimationBake.h"
 #include "AutoBattlerSim.h"
 #include "UnitCulling.h"
 #include "UnitInstance.h"
@@ -460,6 +461,29 @@ static void testUnitInstancePacking(TestContext* pCtx)
     CHECK(unitPoseBlend(packUnitPose(7u, 0.0f)) == 0.0f && unitPoseOffset(packUnitPose(7u, 0.0f)) == 7u);
 }
 
+static void testSkinTable(TestContext* pCtx)
+{
+    // Two rig joints, three mesh joints; mesh joint 2 reuses rig joint 0 with its own bind pose.
+    const mat4 poses[4] = { mat4::translation(vec3(1, 0, 0)), mat4::rotationY(0.5f),  // frame 0
+                            mat4::translation(vec3(2, 0, 0)), mat4::rotationY(1.0f) }; // frame 1
+    SkinJoint  skin[3] = {};
+    skin[0].mRigJoint = 0;
+    skin[0].mInverseBind = mat4::identity();
+    skin[1].mRigJoint = 1;
+    skin[1].mInverseBind = mat4::translation(vec3(0, -1, 0));
+    skin[2].mRigJoint = 0;
+    skin[2].mInverseBind = mat4::scale(vec3(2.0f));
+    const mat4 a = skinnedJointMatrix(poses, skin, 2u, 1u); // frame 1, mesh joint 1
+    const mat4 b = mat4::rotationY(1.0f) * mat4::translation(vec3(0, -1, 0));
+    const mat4 c = skinnedJointMatrix(poses, skin, 0u, 2u); // frame 0, mesh joint 2 -> rig joint 0
+    const mat4 d = mat4::translation(vec3(1, 0, 0)) * mat4::scale(vec3(2.0f));
+    bool       same = true;
+    for (int k = 0; k < 4; ++k)
+        same = same && (float)length(a[k] - b[k]) < 1e-6f && (float)length(c[k] - d[k]) < 1e-6f;
+    CHECK(same);
+    CHECK(sizeof(SkinJoint) % 16u == 0u);
+}
+
 static uint32_t countClip(const RenderData& data, AnimClip clip, bool blueOnly)
 {
     uint32_t n = 0;
@@ -777,6 +801,7 @@ int runAutoBattlerSelfTest(const char* pResultFileName)
         { "render data in prep", testRenderDataPrep },
         { "render data in battle", testRenderDataBattle },
         { "unit instance packing", testUnitInstancePacking },
+        { "skin table", testSkinTable },
         { "animation state", testAnimationState },
         { "stress setup", testStressSetup },
         { "unit culling", testUnitCulling },

@@ -71,7 +71,8 @@ Texture*      pUnitTexture = NULL;
 Texture*      pGroundTexture = NULL;
 
 Buffer* pFrameUniformBuffers[gDataBufferCount] = {};
-Buffer* pBonePaletteBuffer = NULL; // every baked animation frame, static
+Buffer* pBonePaletteBuffer = NULL; // every baked animation frame (rig joint poses), static
+Buffer* pSkinJointBuffer = NULL;   // unit mesh joint -> rig joint and inverse bind pose, static
 Buffer* pUnitInstanceBuffers[gDataBufferCount] = {};
 Buffer* pBillboardBuffers[gDataBufferCount] = {};
 
@@ -398,7 +399,11 @@ ab_zoom; buttonanalog; MOUSE_WHEEL_DOWN; 1.0f; MOUSE_WHEEL_UP; -1.0f)");
             LOGF(eWARNING, "%s not found; units walk with the idle clip", clips[ANIM_WALK]);
             clips[ANIM_WALK] = clips[ANIM_IDLE];
         }
-        if (!bakeAnimations(&gRig, pUnitGeomData, clips, &gBaked))
+        if (!bakeAnimations(&gRig, clips, &gBaked))
+            return false;
+        SkinJoint* pSkin = NULL;
+        uint32_t   skinCount = 0;
+        if (!buildSkinJoints(pUnitGeomData, gBaked.mJointCount, &pSkin, &skinCount))
             return false;
         BufferLoadDesc paletteDesc = {};
         paletteDesc.mDesc.mDescriptors = DESCRIPTOR_TYPE_BUFFER;
@@ -411,7 +416,14 @@ ab_zoom; buttonanalog; MOUSE_WHEEL_DOWN; 1.0f; MOUSE_WHEEL_UP; -1.0f)");
         paletteDesc.pData = gBaked.pPalettes;
         paletteDesc.ppBuffer = &pBonePaletteBuffer;
         addResource(&paletteDesc, NULL);
+        paletteDesc.mDesc.mElementCount = skinCount;
+        paletteDesc.mDesc.mStructStride = sizeof(SkinJoint);
+        paletteDesc.mDesc.mSize = skinCount * sizeof(SkinJoint);
+        paletteDesc.pData = pSkin;
+        paletteDesc.ppBuffer = &pSkinJointBuffer;
+        addResource(&paletteDesc, NULL);
         waitForAllResourceLoads();
+        tf_free(pSkin);
         freeBakedAnimations(&gBaked); // uploaded; offsets and frame counts stay valid
 
         return true;
@@ -444,6 +456,7 @@ ab_zoom; buttonanalog; MOUSE_WHEEL_DOWN; 1.0f; MOUSE_WHEEL_UP; -1.0f)");
         removeResource(pUnitTexture);
         removeResource(pGroundTexture);
         removeResource(pBonePaletteBuffer);
+        removeResource(pSkinJointBuffer);
         removeResource(pVisibleUnitsBuffer);
         removeResource(pUnitDrawArgsBuffer);
         removeResource(pUnitLodIndexBuffer);
@@ -1154,14 +1167,16 @@ ab_zoom; buttonanalog; MOUSE_WHEEL_DOWN; 1.0f; MOUSE_WHEEL_UP; -1.0f)");
 
     void prepareDescriptorSets()
     {
-        DescriptorData persistent[3] = {};
+        DescriptorData persistent[4] = {};
         persistent[0].mIndex = SRT_RES_IDX(SrtData, Persistent, gUnitTexture);
         persistent[0].ppTextures = &pUnitTexture;
         persistent[1].mIndex = SRT_RES_IDX(SrtData, Persistent, gGroundTexture);
         persistent[1].ppTextures = &pGroundTexture;
         persistent[2].mIndex = SRT_RES_IDX(SrtData, Persistent, gBonePalettes);
         persistent[2].ppBuffers = &pBonePaletteBuffer;
-        updateDescriptorSet(pRenderer, 0, pSetPersistent, 3, persistent);
+        persistent[3].mIndex = SRT_RES_IDX(SrtData, Persistent, gSkinJoints);
+        persistent[3].ppBuffers = &pSkinJointBuffer;
+        updateDescriptorSet(pRenderer, 0, pSetPersistent, 4, persistent);
 
         for (uint32_t i = 0; i < gDataBufferCount; ++i)
         {

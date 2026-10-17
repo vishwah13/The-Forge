@@ -510,6 +510,14 @@ static void testBakedPoseBlend(TestContext* pCtx)
     CHECK(p.mOffset == 0u && p.mBlend == 0.0f);
     p = bakedPose(baked, ANIM_DANCE, -1.0f); // negative times clamp to frame 0
     CHECK(p.mOffset == 15u * 10u && p.mBlend == 0.0f);
+
+    // Every pose offset must fit UnitInstance::mPose's 24 bits, or units would play another clip's frames.
+    CHECK(bakedPosesFitInstance(baked));
+    baked.mJointCount = 70u;
+    baked.mFrameTotal = (1u << UNIT_POSE_OFFSET_BITS) / 70u; // offsets up to 16,777,149
+    CHECK(bakedPosesFitInstance(baked));
+    baked.mFrameTotal += 1u;                                 // one frame past 2^24 matrices
+    CHECK(!bakedPosesFitInstance(baked));
 }
 
 static uint32_t countClip(const RenderData& data, AnimClip clip, bool blueOnly)

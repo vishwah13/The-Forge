@@ -401,6 +401,12 @@ ab_zoom; buttonanalog; MOUSE_WHEEL_DOWN; 1.0f; MOUSE_WHEEL_UP; -1.0f)");
         }
         if (!bakeAnimations(&gRig, clips, &gBaked))
             return false;
+        if (!bakedPosesFitInstance(gBaked))
+        {
+            LOGF(eERROR, "AnimationBake: %u frames x %u joints exceeds the %u-bit pose offset in UnitInstance", gBaked.mFrameTotal,
+                 gBaked.mJointCount, UNIT_POSE_OFFSET_BITS);
+            return false;
+        }
         SkinJoint* pSkin = NULL;
         uint32_t   skinCount = 0;
         if (!buildSkinJoints(pUnitGeomData, gBaked.mJointCount, &pSkin, &skinCount))

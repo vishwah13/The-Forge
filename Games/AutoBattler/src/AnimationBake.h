@@ -1,6 +1,7 @@
 #pragma once
 
 #include "AutoBattlerSim.h"
+#include "UnitInstance.h"
 
 class Rig;
 struct GeometryData;
@@ -75,3 +76,9 @@ struct BakedPose
     float    mBlend;  // [0,1) towards the frame mJointCount matrices later
 };
 BakedPose bakedPose(const BakedAnimations& baked, AnimClip clip, float time);
+
+// True when every pose offset in the table fits UnitInstance::mPose (UNIT_POSE_OFFSET_BITS).
+inline bool bakedPosesFitInstance(const BakedAnimations& baked)
+{
+    return (uint64_t)baked.mFrameTotal * baked.mJointCount <= (1ull << UNIT_POSE_OFFSET_BITS);
+}

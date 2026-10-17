@@ -31143,9 +31143,13 @@ void ecs_vec_remove(
     int32_t index)
 {
     ecs_assert(index < ecs_vec_count(v) && ecs_vec_count(v) > 0, ECS_INTERNAL_ERROR, NULL);
-    if (index != stbds_header(v->stb_arr)->length - 1)
+    // Swap-remove like upstream flecs: move the last element into the hole. flecs_table_delete moves the
+    // last entity id into the deleted row, so the component columns must do the same (an ordered remove
+    // re-paired entities and data, and cost O(count) per delete).
+    const size_t last = stbds_header(v->stb_arr)->length - 1;
+    if ((size_t)index != last)
     {
-        memmove((char*)v->stb_arr + size * index, (char*)v->stb_arr + (size * (index + 1)), size * (stbds_header(v->stb_arr)->length - 1 - index));
+        memcpy((char*)v->stb_arr + size * index, (char*)v->stb_arr + size * last, size);
     }
     stbds_header(v->stb_arr)->length--;
 }

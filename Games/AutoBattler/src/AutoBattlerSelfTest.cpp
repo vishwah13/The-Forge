@@ -1,4 +1,5 @@
 #include "AnimationBake.h"
+#include "../../../Common_3/Game/ThirdParty/OpenSource/flecs/flecs.h"
 #include "AutoBattlerSim.h"
 #include "UnitCulling.h"
 #include "UnitInstance.h"
@@ -406,6 +407,43 @@ static void testStepTimings(TestContext* pCtx)
     simGetTimings(s, &t);
     CHECK(t.mSteps == 0u && t.mSteerUs == 0 && t.mSystemsUs == 0 && t.mSteerCpuUs == 0);
     simDestroy(s);
+}
+
+// Deleting an entity from the middle of a table must leave every other entity with its own data. The
+// Forge's flecs once shifted component columns while moving only the last entity id into the hole, which
+// re-paired entities and data (and made each delete O(table size)).
+struct TestValue
+{
+    float mValue;
+};
+
+static void testFlecsDeleteKeepsEntityData(TestContext* pCtx)
+{
+    ecs_world_t*      w = ecs_init();
+    ecs_entity_desc_t entityDesc = {};
+    entityDesc.name = "TestValue";
+    ecs_component_desc_t componentDesc = {};
+    componentDesc.entity = ecs_entity_init(w, &entityDesc);
+    componentDesc.type.size = sizeof(TestValue);
+    componentDesc.type.alignment = alignof(TestValue);
+    const ecs_entity_t component = ecs_component_init(w, &componentDesc);
+
+    ecs_entity_t entities[5];
+    for (uint32_t i = 0; i < 5; ++i)
+    {
+        entities[i] = ecs_new(w);
+        const TestValue value = { (float)i };
+        ecs_set_id(w, entities[i], component, sizeof(value), &value);
+    }
+    ecs_delete(w, entities[0]); // first row: the last entity moves into it
+    ecs_delete(w, entities[2]); // a middle row
+    bool own = true;
+    for (uint32_t i = 0; i < 5; ++i)
+        if (i != 0 && i != 2)
+            own = own && ((const TestValue*)ecs_get_id(w, entities[i], component))->mValue == (float)i;
+    CHECK(own);
+    CHECK(!ecs_is_alive(w, entities[0]) && !ecs_is_alive(w, entities[2]));
+    ecs_fini(w);
 }
 
 static RenderData allocRenderData(uint32_t unitCapacity = MAX_UNITS)
@@ -894,6 +932,7 @@ int runAutoBattlerSelfTest(const char* pResultFileName)
         { "restart mid battle", testRestartMidBattle },
         { "thread count does not change outcome", testThreadCountDoesNotChangeOutcome },
         { "thread count does not change a stress battle", testThreadCountDoesNotChangeStress },
+        { "flecs delete keeps entity data", testFlecsDeleteKeepsEntityData },
         { "render data in prep", testRenderDataPrep },
         { "render data in battle", testRenderDataBattle },
         { "unit instance packing", testUnitInstancePacking },

@@ -1,19 +1,12 @@
 #pragma once
 
-#include "../../../Common_3/Utilities/Math/MathTypes.h"
+#include "../../../../Common_3/Utilities/Math/MathTypes.h"
+
+#include "UnitTypes.h"
 
 // Gameplay simulation for AutoBattler, built on Flecs. Has no graphics dependencies so the self
 // test can drive it without a renderer. Only one BattleSim may exist at a time: Flecs component ids
 // are file-scope globals that are re-registered for each world.
-
-enum UnitType : int8_t
-{
-    UNIT_NONE = -1,
-    UNIT_MELEE = 0,
-    UNIT_RANGED,
-    UNIT_TANK,
-    UNIT_TYPE_COUNT
-};
 
 enum Team : uint8_t
 {
@@ -44,20 +37,6 @@ static const float    UNIT_RADIUS = 0.4f;
 static const float    PROJECTILE_SPEED = 15.0f;
 static const uint32_t MAX_BILLBOARDS = MAX_UNITS + MAX_PROJECTILES;
 static const float    UNIT_MODEL_SCALE = 1.0f; // the Paladin is modelled in metres, ~1.73 m tall
-
-struct UnitStats
-{
-    const char* pName;
-    int32_t     mSquadSide; // a squad is mSquadSide x mSquadSide units
-    int32_t     mCost;
-    float       mHp;
-    float       mDamage;
-    float       mCooldown;
-    float       mRange;
-    float       mSpeed;
-    float       mScale;
-};
-extern const UnitStats gUnitStats[UNIT_TYPE_COUNT];
 
 // Animation clip a unit is playing. The app turns (clip, time) into a baked palette offset.
 enum AnimClip : uint8_t

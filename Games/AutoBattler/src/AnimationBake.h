@@ -1,7 +1,7 @@
 #pragma once
 
-#include "AutoBattlerSim.h"
-#include "UnitInstance.h"
+#include "Game/Sim.h"
+#include "Game/UnitInstance.h"
 
 class Rig;
 struct GeometryData;

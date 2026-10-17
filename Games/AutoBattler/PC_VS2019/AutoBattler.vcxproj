@@ -140,8 +140,13 @@
     </FSLShader>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="..\src\Game\Health.cpp" />
+    <ClCompile Include="..\src\Game\Combat.cpp" />
+    <ClCompile Include="..\src\Game\Steering.cpp" />
+    <ClCompile Include="..\src\Game\SpatialGrid.cpp" />
+    <ClCompile Include="..\src\Game\UnitTypes.cpp" />
+    <ClCompile Include="..\src\Game\Sim.cpp" />
     <ClCompile Include="..\src\AutoBattler.cpp" />
-    <ClCompile Include="..\src\AutoBattlerSim.cpp" />
     <ClCompile Include="..\src\AutoBattlerSelfTest.cpp" />
     <ClCompile Include="..\src\AnimationBake.cpp" />
     <ClCompile Include="..\src\UnitLod.cpp" />
@@ -151,7 +156,11 @@
     <ClCompile Include="..\..\..\Common_3\Game\ThirdParty\OpenSource\flecs\flecs.c" />
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="..\src\AutoBattlerSim.h" />
+    <ClInclude Include="..\src\Game\UnitInstance.h" />
+    <ClInclude Include="..\src\Game\UnitTypes.h" />
+    <ClInclude Include="..\src\Game\Components.h" />
+    <ClInclude Include="..\src\Game\SimInternal.h" />
+    <ClInclude Include="..\src\Game\Sim.h" />
     <ClInclude Include="..\src\AnimationBake.h" />
     <ClInclude Include="..\src\UnitCulling.h" />
     <ClInclude Include="..\src\UnitLod.h" />

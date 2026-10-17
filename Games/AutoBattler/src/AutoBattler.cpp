@@ -1,9 +1,9 @@
-// AutoBattler: top-down auto battler. Gameplay lives in AutoBattlerSim (Flecs); this file owns
+// AutoBattler: top-down auto battler. Gameplay lives in Game/ (Flecs); this file owns
 // rendering, camera, input and UI.
 
 #include "AnimationBake.h"
-#include "UnitInstance.h"
-#include "AutoBattlerSim.h"
+#include "Game/UnitInstance.h"
+#include "Game/Sim.h"
 #include "UnitCulling.h"
 #include "UnitLod.h"
 

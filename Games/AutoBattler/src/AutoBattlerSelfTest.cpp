@@ -1,8 +1,8 @@
 #include "AnimationBake.h"
 #include "../../../Common_3/Game/ThirdParty/OpenSource/flecs/flecs.h"
-#include "AutoBattlerSim.h"
+#include "Game/Sim.h"
 #include "UnitCulling.h"
-#include "UnitInstance.h"
+#include "Game/UnitInstance.h"
 #include "UnitLod.h"
 
 #include <math.h>

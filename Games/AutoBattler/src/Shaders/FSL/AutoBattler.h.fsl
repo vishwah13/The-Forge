@@ -1,7 +1,7 @@
 #ifndef AUTOBATTLER_H
 #define AUTOBATTLER_H
 
-// Layouts must match FrameUniforms in AutoBattler.cpp, UnitInstance in UnitInstance.h and BillboardInstance in AutoBattlerSim.h.
+// Layouts must match FrameUniforms in AutoBattler.cpp, UnitInstance in Game/UnitInstance.h and BillboardInstance in Game/Sim.h.
 STRUCT(FrameUniforms)
 {
     DATA(float4x4, viewProj, None);

@@ -1,6 +1,8 @@
 ﻿<?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup>
+    <Filter Include="Headers\Game" />
+    <Filter Include="Source\Game" />
     <Filter Include="Source">
       <UniqueIdentifier>{8bde3048-db88-4096-b075-c9a253851149}</UniqueIdentifier>
     </Filter>
@@ -15,10 +17,25 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="..\src\AutoBattler.cpp">
-      <Filter>Source</Filter>
+    <ClCompile Include="..\src\Game\Health.cpp">
+      <Filter>Source\Game</Filter>
     </ClCompile>
-    <ClCompile Include="..\src\AutoBattlerSim.cpp">
+    <ClCompile Include="..\src\Game\Combat.cpp">
+      <Filter>Source\Game</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Game\Steering.cpp">
+      <Filter>Source\Game</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Game\SpatialGrid.cpp">
+      <Filter>Source\Game</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Game\UnitTypes.cpp">
+      <Filter>Source\Game</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Game\Sim.cpp">
+      <Filter>Source\Game</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\AutoBattler.cpp">
       <Filter>Source</Filter>
     </ClCompile>
     <ClCompile Include="..\src\AutoBattlerSelfTest.cpp">
@@ -42,8 +59,20 @@
     <ClCompile Include="..\..\..\Common_3\Game\ThirdParty\OpenSource\flecs\flecs.c">
       <Filter>Source</Filter>
     </ClCompile>
-    <ClInclude Include="..\src\AutoBattlerSim.h">
-      <Filter>Headers</Filter>
+    <ClInclude Include="..\src\Game\UnitInstance.h">
+      <Filter>Headers\Game</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Game\UnitTypes.h">
+      <Filter>Headers\Game</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Game\Components.h">
+      <Filter>Headers\Game</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Game\SimInternal.h">
+      <Filter>Headers\Game</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Game\Sim.h">
+      <Filter>Headers\Game</Filter>
     </ClInclude>
     <ClInclude Include="..\src\AnimationBake.h">
       <Filter>Headers</Filter>

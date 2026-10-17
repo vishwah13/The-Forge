@@ -1,6 +1,6 @@
 #pragma once
 
-#include "AutoBattlerSim.h"
+#include "Sim.h"
 
 #include <math.h>
 

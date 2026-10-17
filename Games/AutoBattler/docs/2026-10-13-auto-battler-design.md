@@ -116,9 +116,11 @@ per-frame GPU buffers. The sim never touches GPU objects.
 
 ## Rendering
 
-- **Units:** one indexed indirect draw of the Stormtrooper mesh. Per-instance structured buffer
-  `{ float4x4 world; float4 color; float4 anim; }`; color = team colour + hit flash, anim.x = the
-  instance's first matrix in a static palette table. Units render at 0.5 scale (the bind pose is 3.7 m).
+- **Units:** indexed indirect draws of the unit mesh (a placeholder until the character kit). Per-instance
+  structured buffer of 24 bytes (`UnitInstance.h`): x, z, yaw, scale, team + hit flash (packed), and the
+  pose (first matrix in the baked table + blend to the next frame, packed). The cull and vertex shaders
+  rebuild the world matrix; `unitWorldMatrix()` is the self-tested reference. Team colours are in the
+  frame uniforms.
 - **GPU culling:** before the draw, `cullclear.comp` resets the indirect draw arguments and
   `cull.comp` (one thread per unit) tests each unit's bounding sphere against the six frustum planes,
   appending visible unit indices to a list and counting them into the draw's instance count. The
@@ -135,12 +137,14 @@ per-frame GPU buffers. The sim never touches GPU objects.
   descriptor set whose `gVisibleUnits` range is that level's list. The stress check compares the
   GPU's drawn triangles with the CPU reference. Visible-list entries carry the level in their top
   two bits, so the UI checkbox "Debug: LOD colours" can tint units green / yellow / red by level.
-- **Animation:** `AnimationBake` samples every clip at 30 fps at startup into skinning palettes:
-  `dance.ozz` on the Stormtrooper rig, and the stickFigure's `stand.ozz` (idle) and `walk.ozz`
-  retargeted onto it (Biped→Mixamo name map; model-space rotation delta from rest pose applied to the
-  target rest pose; target bone lengths; hips keep only the vertical bob). The sim gives each unit a
-  clip (walk when moving, idle in range/prep, dance for the winning side) and its own clock with a
-  per-unit phase offset and speed-scaled walk rate; the app maps (clip, time) to a palette offset.
+- **Animation:** `AnimationBake` samples every clip at 30 fps at startup into model-space poses per
+  rig joint, stored as 3x4 affine rows (48 B); each clip ends with a copy of its first frame so the
+  next frame is always in the same clip. Each mesh uploads a `SkinJoint` table (rig joint + inverse
+  bind pose per mesh joint), applied in the vertex shader, so every mesh skinned to the same skeleton
+  shares one pose table. LOD0/LOD1 blend the unit's frame with the next; LOD2 reads one frame. The sim
+  gives each unit a clip (walk when moving, attack in range, idle in prep, dance for the winning side)
+  and its own clock with a per-unit phase offset and speed-scaled walk rate (`UnitAnim`); the app maps
+  (clip, time) to a pose offset and blend.
 - **Ground:** quad with tiled copper albedo, darker tint on the enemy half, grid lines, highlighted
   hover cell in Prep (green = can place, red = cannot).
 - **Health bars:** instanced camera-facing quads above damaged units (green over red).

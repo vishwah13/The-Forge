@@ -76,8 +76,9 @@ written this way, and the existing AutoBattler code already is.
 - **Templates where they make the code simpler:** small generic helpers (for example `clamp`/`min`/`max`
   over types, or a fixed-capacity array of `T`), so one helper replaces near-identical copies. No template
   metaprogramming beyond that.
-- **No lambdas or `auto`.** Flecs systems and thread-pool tasks are `static` functions. Types are spelled
-  out.
+- **Lambdas and `auto` where they make the code clearer.** Examples are a short local callback or
+  predicate, or `auto` for a long or obvious type. Named `static` functions stay the default for anything
+  substantial, such as flecs systems and thread-pool tasks, which also need plain function pointers.
 - **Allowed where they make code simpler:** references for in/out parameters, `static_assert` on GPU
   layouts, `inline` helpers in headers, default arguments, The Forge's vectormath types with their
   operators, and a small scoped timer (`ScopedUSec`), whose destructor keeps the timing correct across

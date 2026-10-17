@@ -72,7 +72,7 @@ bool bakeAnimations(Rig* pRig, const char* const pClipFiles[ANIM_CLIP_COUNT], Ba
         pOut->mClips[c].mFrameCount = samplers[c].frameCount();
         pOut->mFrameTotal += pOut->mClips[c].mFrameCount + 1; // + wrap frame
     }
-    pOut->pPalettes = (mat4*)tf_memalign(16, sizeof(mat4) * pOut->mFrameTotal * pOut->mJointCount);
+    pOut->pPalettes = (Affine*)tf_memalign(16, sizeof(Affine) * pOut->mFrameTotal * pOut->mJointCount);
 
     for (uint32_t c = 0; c < ANIM_CLIP_COUNT; ++c)
     {
@@ -80,21 +80,23 @@ bool bakeAnimations(Rig* pRig, const char* const pClipFiles[ANIM_CLIP_COUNT], Ba
         for (uint32_t f = 0; f < clip.mFrameCount; ++f)
         {
             const Matrix4* pJointModel = samplers[c].sample((float)f / BAKE_FPS);
-            mat4*          pDst = &pOut->pPalettes[(clip.mFirstFrame + f) * pOut->mJointCount];
+            Affine*        pDst = &pOut->pPalettes[(clip.mFirstFrame + f) * pOut->mJointCount];
             for (uint32_t j = 0; j < pOut->mJointCount; ++j)
-                pDst[j] = pJointModel[j];
+                pDst[j] = toAffine(pJointModel[j]);
         }
         memcpy(&pOut->pPalettes[(clip.mFirstFrame + clip.mFrameCount) * pOut->mJointCount], &pOut->pPalettes[clip.mFirstFrame * pOut->mJointCount],
-               sizeof(mat4) * pOut->mJointCount);
+               sizeof(Affine) * pOut->mJointCount);
         LOGF(eINFO, "AnimationBake: %s baked %u frames", pClipFiles[c], clip.mFrameCount);
     }
 
     bool         ok = true;
     const float* pFloats = (const float*)pOut->pPalettes;
-    for (uint64_t i = 0; i < (uint64_t)pOut->mFrameTotal * pOut->mJointCount * 16u && ok; ++i)
+    for (uint64_t i = 0; i < (uint64_t)pOut->mFrameTotal * pOut->mJointCount * 12u && ok; ++i)
         ok = isfinite(pFloats[i]) != 0;
     if (!ok)
         LOGF(eERROR, "AnimationBake: non-finite palette");
+    LOGF(eINFO, "AnimationBake: %u frames x %u joints = %u KB", pOut->mFrameTotal, pOut->mJointCount,
+         (uint32_t)(sizeof(Affine) * pOut->mFrameTotal * pOut->mJointCount / 1024));
 
     for (uint32_t c = 0; c < ANIM_CLIP_COUNT; ++c)
         samplers[c].exit();
@@ -113,7 +115,7 @@ bool buildSkinJoints(const GeometryData* pGeom, uint32_t rigJointCount, SkinJoin
             return false;
         }
         pSkin[i] = {};
-        pSkin[i].mInverseBind = pGeom->pInverseBindPoses[i];
+        pSkin[i].mInverseBind = toAffine(pGeom->pInverseBindPoses[i]);
         pSkin[i].mRigJoint = pGeom->pJointRemaps[i];
     }
     *ppOut = pSkin;

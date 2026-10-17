@@ -19,6 +19,9 @@ STRUCT(VSOutput)
     DATA(float4, Color, COLOR0);
 };
 
+// Rows r0-r2 of an affine matrix times v, as affineMul() in AnimationBake.h.
+float3 affineMul(float4 r0, float4 r1, float4 r2, float4 v) { return float3(dot(r0, v), dot(r1, v), dot(r2, v)); }
+
 ROOT_SIGNATURE(DefaultRootSignature)
 VSOutput VS_MAIN(VSInput In, SV_InstanceID(uint) instanceId)
 {
@@ -41,13 +44,18 @@ VSOutput VS_MAIN(VSInput In, SV_InstanceID(uint) instanceId)
     for (uint k = 0; k < 4; ++k)
     {
         SkinJoint skin = gSkinJoints[In.BoneIndices[k]];
-        float4x4  pose = gBonePalettes[palette + skin.rigJoint];
+        Affine    pose = gBonePalettes[palette + skin.rigJoint];
         if (blend > 0.0f)
-            pose += (gBonePalettes[palette + gFrame.rigJointCount + skin.rigJoint] - pose) * blend; // no matrix lerp in GLSL
-        float4    bindPos = mul(skin.inverseBind, float4(In.Position, 1.0f));
-        float4    bindNormal = mul(skin.inverseBind, float4(normalIn, 0.0f));
-        model += In.BoneWeights[k] * mul(pose, bindPos).xyz;
-        normal += In.BoneWeights[k] * mul(pose, bindNormal).xyz;
+        {
+            Affine next = gBonePalettes[palette + gFrame.rigJointCount + skin.rigJoint];
+            pose.row0 = lerp(pose.row0, next.row0, blend);
+            pose.row1 = lerp(pose.row1, next.row1, blend);
+            pose.row2 = lerp(pose.row2, next.row2, blend);
+        }
+        float3 bindPos = affineMul(skin.bind0, skin.bind1, skin.bind2, float4(In.Position, 1.0f));
+        float3 bindNormal = affineMul(skin.bind0, skin.bind1, skin.bind2, float4(normalIn, 0.0f));
+        model += In.BoneWeights[k] * affineMul(pose.row0, pose.row1, pose.row2, float4(bindPos, 1.0f));
+        normal += In.BoneWeights[k] * affineMul(pose.row0, pose.row1, pose.row2, float4(bindNormal, 0.0f));
     }
 
     // World = translation(x, 0, z) * rotationY(yaw) * scale, as unitWorldMatrix() in UnitInstance.h.

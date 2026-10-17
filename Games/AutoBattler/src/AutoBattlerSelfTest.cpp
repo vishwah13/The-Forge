@@ -463,25 +463,28 @@ static void testUnitInstancePacking(TestContext* pCtx)
 
 static void testSkinTable(TestContext* pCtx)
 {
+    CHECK(sizeof(Affine) == 48u && sizeof(SkinJoint) == 64u);
+
     // Two rig joints, three mesh joints; mesh joint 2 reuses rig joint 0 with its own bind pose.
-    const mat4 poses[4] = { mat4::translation(vec3(1, 0, 0)), mat4::rotationY(0.5f),  // frame 0
-                            mat4::translation(vec3(2, 0, 0)), mat4::rotationY(1.0f) }; // frame 1
-    SkinJoint  skin[3] = {};
+    const Affine poses[4] = { toAffine(mat4::translation(vec3(1, 0, 0))), toAffine(mat4::rotationY(0.5f)),   // frame 0
+                              toAffine(mat4::translation(vec3(2, 0, 0))), toAffine(mat4::rotationY(1.0f)) }; // frame 1
+    SkinJoint    skin[3] = {};
     skin[0].mRigJoint = 0;
-    skin[0].mInverseBind = mat4::identity();
+    skin[0].mInverseBind = toAffine(mat4::identity());
     skin[1].mRigJoint = 1;
-    skin[1].mInverseBind = mat4::translation(vec3(0, -1, 0));
+    skin[1].mInverseBind = toAffine(mat4::translation(vec3(0, -1, 0)));
     skin[2].mRigJoint = 0;
-    skin[2].mInverseBind = mat4::scale(vec3(2.0f));
-    const mat4 a = skinnedJointMatrix(poses, skin, 2u, 1u); // frame 1, mesh joint 1
-    const mat4 b = mat4::rotationY(1.0f) * mat4::translation(vec3(0, -1, 0));
-    const mat4 c = skinnedJointMatrix(poses, skin, 0u, 2u); // frame 0, mesh joint 2 -> rig joint 0
-    const mat4 d = mat4::translation(vec3(1, 0, 0)) * mat4::scale(vec3(2.0f));
-    bool       same = true;
-    for (int k = 0; k < 4; ++k)
-        same = same && (float)length(a[k] - b[k]) < 1e-6f && (float)length(c[k] - d[k]) < 1e-6f;
-    CHECK(same);
-    CHECK(sizeof(SkinJoint) % 16u == 0u);
+    skin[2].mInverseBind = toAffine(mat4::scale(vec3(2.0f)));
+
+    // Frame 1, mesh joint 1, a point.
+    const vec4   v(0.3f, 1.2f, -0.7f, 1.0f);
+    const vec3   expected = (mat4::rotationY(1.0f) * mat4::translation(vec3(0, -1, 0)) * v).getXYZ();
+    const float3 actual = skinnedPoint(poses, skin, 2u, 1u, v4ToF4(v));
+    CHECK((float)length(f3Tov3(actual) - expected) < 1e-5f);
+    // Frame 0, mesh joint 2 -> rig joint 0, a direction (translation ignored).
+    const vec4 dir(0.0f, 0.0f, 1.0f, 0.0f);
+    const vec3 expectedDir = (mat4::translation(vec3(1, 0, 0)) * mat4::scale(vec3(2.0f)) * dir).getXYZ();
+    CHECK((float)length(f3Tov3(skinnedPoint(poses, skin, 0u, 2u, v4ToF4(dir))) - expectedDir) < 1e-5f);
 }
 
 static void testBakedPoseBlend(TestContext* pCtx)

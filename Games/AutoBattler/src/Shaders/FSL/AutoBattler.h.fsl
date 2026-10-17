@@ -34,9 +34,18 @@ STRUCT(UnitInstance)
 };
 #define UNIT_POSE_OFFSET_MASK 0xffffffu // must match UNIT_POSE_OFFSET_BITS in UnitInstance.h
 
-STRUCT(SkinJoint) // must match SkinJoint in AnimationBake.h
+STRUCT(Affine) // rows 0-2 of an affine matrix; must match Affine in AnimationBake.h
 {
-    DATA(float4x4, inverseBind, None);
+    DATA(float4, row0, None);
+    DATA(float4, row1, None);
+    DATA(float4, row2, None);
+};
+
+STRUCT(SkinJoint) // must match SkinJoint in AnimationBake.h (64 bytes); bind0-2 are its inverse bind Affine
+{
+    DATA(float4, bind0, None);
+    DATA(float4, bind1, None);
+    DATA(float4, bind2, None);
     DATA(uint, rigJoint, None);
     DATA(uint, pad0, None);
     DATA(uint, pad1, None);

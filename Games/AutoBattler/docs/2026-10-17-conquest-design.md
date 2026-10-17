@@ -73,8 +73,11 @@ written this way, and the existing AutoBattler code already is.
 - **No STL containers, strings or streams.** Memory comes from `tf_malloc` / `tf_calloc` / `tf_free`, into
   fixed-capacity arrays sized at creation (unit capacity, `MAX_PLACES`). Text uses `snprintf`.
 - **C headers:** `<math.h>`, `<string.h>`, `<stdio.h>`; never `<cmath>`, `<cstring>` and the like.
-- **No templates or metaprogramming, lambdas or `auto`.** Flecs systems and thread-pool tasks are `static`
-  functions. Types are spelled out.
+- **Templates where they make the code simpler:** small generic helpers (for example `clamp`/`min`/`max`
+  over types, or a fixed-capacity array of `T`), so one helper replaces near-identical copies. No template
+  metaprogramming beyond that.
+- **No lambdas or `auto`.** Flecs systems and thread-pool tasks are `static` functions. Types are spelled
+  out.
 - **Allowed where they make code simpler:** references for in/out parameters, `static_assert` on GPU
   layouts, `inline` helpers in headers, default arguments, The Forge's vectormath types with their
   operators, and a small scoped timer (`ScopedUSec`), whose destructor keeps the timing correct across

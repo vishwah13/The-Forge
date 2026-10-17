@@ -9,17 +9,21 @@ struct GeometryData;
 // joint per frame) so each instance can pick its own frame on the GPU. Each mesh applies its own joint
 // remap and inverse bind poses (SkinJoint), so every mesh skinned to the same skeleton shares one table.
 // The clips are authored for the model's own skeleton (see Tools/MixamoImport), so they are sampled as they are.
+static const float BAKE_FPS = 30.0f; // baked frames per second of animation
+
+// Each clip stores mFrameCount frames plus a copy of its first frame, so blending to the next frame never
+// leaves the clip.
 struct BakedClip
 {
     uint32_t mFirstFrame;
-    uint32_t mFrameCount;
+    uint32_t mFrameCount; // distinct frames
 };
 
 struct BakedAnimations
 {
     mat4*     pPalettes;   // mFrameTotal * mJointCount pose matrices
     uint32_t  mJointCount; // rig joints per frame
-    uint32_t  mFrameTotal;
+    uint32_t  mFrameTotal; // stored frames, wrap frames included
     BakedClip mClips[ANIM_CLIP_COUNT];
 };
 

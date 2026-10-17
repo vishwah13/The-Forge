@@ -484,6 +484,31 @@ static void testSkinTable(TestContext* pCtx)
     CHECK(sizeof(SkinJoint) % 16u == 0u);
 }
 
+static void testBakedPoseBlend(TestContext* pCtx)
+{
+    BakedAnimations baked = {};
+    baked.mJointCount = 10;
+    for (uint32_t c = 0; c < ANIM_CLIP_COUNT; ++c)
+    {
+        baked.mClips[c].mFirstFrame = c * 5u; // 4 distinct frames + 1 wrap frame each
+        baked.mClips[c].mFrameCount = 4u;
+    }
+    baked.mFrameTotal = ANIM_CLIP_COUNT * 5u;
+
+    const float dt = 1.0f / BAKE_FPS;
+    BakedPose   p = bakedPose(baked, ANIM_WALK, 1.25f * dt); // a quarter past frame 1 of clip 1
+    CHECK(p.mOffset == (5u + 1u) * 10u && fabsf(p.mBlend - 0.25f) < 1e-3f);
+    p = bakedPose(baked, ANIM_WALK, 3.5f * dt); // halfway from the last frame into the wrap frame
+    CHECK(p.mOffset == (5u + 3u) * 10u && fabsf(p.mBlend - 0.5f) < 1e-3f);
+    CHECK(p.mOffset + baked.mJointCount < (5u + 5u) * 10u); // next frame is still this clip's (the wrap frame)
+    p = bakedPose(baked, ANIM_WALK, 4.0f * dt);             // looped back to frame 0
+    CHECK(p.mOffset == 5u * 10u && p.mBlend < 1e-3f);
+    p = bakedPose(baked, ANIM_IDLE, 0.0f);
+    CHECK(p.mOffset == 0u && p.mBlend == 0.0f);
+    p = bakedPose(baked, ANIM_DANCE, -1.0f); // negative times clamp to frame 0
+    CHECK(p.mOffset == 15u * 10u && p.mBlend == 0.0f);
+}
+
 static uint32_t countClip(const RenderData& data, AnimClip clip, bool blueOnly)
 {
     uint32_t n = 0;
@@ -802,6 +827,7 @@ int runAutoBattlerSelfTest(const char* pResultFileName)
         { "render data in battle", testRenderDataBattle },
         { "unit instance packing", testUnitInstancePacking },
         { "skin table", testSkinTable },
+        { "baked pose blend", testBakedPoseBlend },
         { "animation state", testAnimationState },
         { "stress setup", testStressSetup },
         { "unit culling", testUnitCulling },

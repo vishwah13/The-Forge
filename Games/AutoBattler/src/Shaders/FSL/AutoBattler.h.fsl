@@ -17,7 +17,7 @@ STRUCT(FrameUniforms)
     DATA(uint, unitCount, None);       // units in gUnitInstances
     DATA(uint, unitCapacity, None);    // length of each LOD's visible list
     DATA(uint, debugFlags, None);      // DEBUG_* bits
-    DATA(uint, pad0, None);
+    DATA(uint, rigJointCount, None);   // pose matrices per baked frame
     DATA(uint4, lodFirstIndex, None);  // per LOD, into the LOD index buffer
     DATA(uint4, lodIndexCount, None);
 };

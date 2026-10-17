@@ -13,7 +13,6 @@
 
 #include "../../../Common_3/Utilities/Interfaces/IMemory.h"
 
-static const float BAKE_FPS = 30.0f;
 
 // Plays one clip on one rig at arbitrary times.
 struct ClipSampler
@@ -71,7 +70,7 @@ bool bakeAnimations(Rig* pRig, const char* const pClipFiles[ANIM_CLIP_COUNT], Ba
         samplers[c].init(pRig, pClipFiles[c]);
         pOut->mClips[c].mFirstFrame = pOut->mFrameTotal;
         pOut->mClips[c].mFrameCount = samplers[c].frameCount();
-        pOut->mFrameTotal += pOut->mClips[c].mFrameCount;
+        pOut->mFrameTotal += pOut->mClips[c].mFrameCount + 1; // + wrap frame
     }
     pOut->pPalettes = (mat4*)tf_memalign(16, sizeof(mat4) * pOut->mFrameTotal * pOut->mJointCount);
 
@@ -85,6 +84,8 @@ bool bakeAnimations(Rig* pRig, const char* const pClipFiles[ANIM_CLIP_COUNT], Ba
             for (uint32_t j = 0; j < pOut->mJointCount; ++j)
                 pDst[j] = pJointModel[j];
         }
+        memcpy(&pOut->pPalettes[(clip.mFirstFrame + clip.mFrameCount) * pOut->mJointCount], &pOut->pPalettes[clip.mFirstFrame * pOut->mJointCount],
+               sizeof(mat4) * pOut->mJointCount);
         LOGF(eINFO, "AnimationBake: %s baked %u frames", pClipFiles[c], clip.mFrameCount);
     }
 
@@ -129,6 +130,8 @@ void freeBakedAnimations(BakedAnimations* pBaked)
 BakedPose bakedPose(const BakedAnimations& baked, AnimClip clip, float time)
 {
     const BakedClip& c = baked.mClips[clip];
-    const uint32_t   frame = time > 0.0f ? (uint32_t)(time * BAKE_FPS) % c.mFrameCount : 0u;
-    return { (c.mFirstFrame + frame) * baked.mJointCount, 0.0f };
+    const float      frames = time > 0.0f ? time * BAKE_FPS : 0.0f;
+    const float      whole = floorf(frames);
+    const uint32_t   frame = (uint32_t)fmodf(whole, (float)c.mFrameCount);
+    return { (c.mFirstFrame + frame) * baked.mJointCount, frames - whole };
 }

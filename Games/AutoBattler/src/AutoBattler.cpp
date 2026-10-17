@@ -111,7 +111,7 @@ struct FrameUniforms
     uint32_t mUnitCount;
     uint32_t mUnitCapacity;
     uint32_t mDebugFlags; // DEBUG_* bits
-    uint32_t mPad;
+    uint32_t mRigJointCount; // pose matrices per baked frame
     uint32_t mLodFirstIndex[4]; // uint4 in the shader; UNIT_LOD_COUNT used
     uint32_t mLodIndexCount[4];
 };
@@ -802,6 +802,7 @@ ab_zoom; buttonanalog; MOUSE_WHEEL_DOWN; 1.0f; MOUSE_WHEEL_UP; -1.0f)");
         gFrameUniforms.mUnitCount = gRenderData.mUnitCount;
         gFrameUniforms.mUnitCapacity = gUnitCapacity;
         gFrameUniforms.mDebugFlags = gShowLodColors ? DEBUG_LOD_COLORS : 0u;
+        gFrameUniforms.mRigJointCount = gBaked.mJointCount;
         for (uint32_t lod = 0; lod < UNIT_LOD_COUNT; ++lod)
         {
             gFrameUniforms.mLodFirstIndex[lod] = gLodFirstIndex[lod];

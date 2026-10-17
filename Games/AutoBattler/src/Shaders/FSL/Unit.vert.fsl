@@ -30,6 +30,9 @@ VSOutput VS_MAIN(VSInput In, SV_InstanceID(uint) instanceId)
     uint     unit = entry & ((1u << VISIBLE_LOD_SHIFT) - 1u);
     UnitInstance inst = gUnitInstances[unit];
     uint         palette = inst.pose & UNIT_POSE_OFFSET_MASK;
+    // Blend towards the next baked frame (each clip ends with a copy of its first frame); LOD2 is too
+    // small on screen to notice and reads one frame.
+    float blend = (entry >> VISIBLE_LOD_SHIFT) < 2u ? float(inst.pose >> 24) / 255.0f : 0.0f;
 
     // Each influence: mesh joint -> rig joint pose in the shared table, times this mesh's inverse bind.
     float3 model = float3(0.0f, 0.0f, 0.0f);
@@ -39,6 +42,8 @@ VSOutput VS_MAIN(VSInput In, SV_InstanceID(uint) instanceId)
     {
         SkinJoint skin = gSkinJoints[In.BoneIndices[k]];
         float4x4  pose = gBonePalettes[palette + skin.rigJoint];
+        if (blend > 0.0f)
+            pose += (gBonePalettes[palette + gFrame.rigJointCount + skin.rigJoint] - pose) * blend; // no matrix lerp in GLSL
         float4    bindPos = mul(skin.inverseBind, float4(In.Position, 1.0f));
         float4    bindNormal = mul(skin.inverseBind, float4(normalIn, 0.0f));
         model += In.BoneWeights[k] * mul(pose, bindPos).xyz;

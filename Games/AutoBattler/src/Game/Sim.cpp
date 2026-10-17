@@ -189,6 +189,8 @@ bool simSpawnUnit(BattleSim* p, Team team, UnitType type, float x, float z)
     // Positive tests so NaN is refused too.
     if (!(x >= 0.0f && x < p->mWorldSize && z >= 0.0f && z < p->mWorldSize))
         return false;
+    if (!(type >= 0 && type < UNIT_TYPE_COUNT) || team >= TEAM_COUNT) // indexes gUnitStats and the per-team grid rings
+        return false;
     if (simGetUnitCount(p, TEAM_PLAYER) + simGetUnitCount(p, TEAM_ENEMY) >= p->mUnitCapacity)
         return false;
     spawnUnit(p, team, type, x, z);

@@ -136,6 +136,10 @@ GameMode   gMode = {};
 static const uint32_t SANDBOX_UNITS_PER_TEAM = 1400; // 2,800 units, the old smoke battle size
 RenderData gRenderData = {};
 
+// Ground grid and texture tile every GROUND_TILE_SIZE metres (the old 5 m board cell) until the ground
+// shader is rewritten in conquest plan 3.
+static const float GROUND_TILE_SIZE = 5.0f;
+
 // Camera orbits a ground target at a fixed pitch.
 const float CAMERA_PITCH = 55.0f * PI / 180.0f;
 const float CAMERA_FOV_X = PI / 3.0f;
@@ -645,7 +649,7 @@ ab_zoom; buttonanalog; MOUSE_WHEEL_DOWN; 1.0f; MOUSE_WHEEL_UP; -1.0f)");
         gFrameUniforms.mCamUp = float4(v3ToF3(gCameraUp), 0.0f);
         const float worldSize = simGetWorldSize(pSim);
         gFrameUniforms.mArena = float4(worldSize, 0.5f * worldSize, 0.0f, 0.0f); // the enemy half starts halfway
-        gFrameUniforms.mHoverCell = float4(0.0f, 0.0f, 0.0f, 1.0f); // no hover cell (the ground shader rewrite is conquest plan 3)
+        gFrameUniforms.mHoverCell = float4(0.0f, 0.0f, 0.0f, GROUND_TILE_SIZE); // no hover cell; w sizes the ground tiles and grid
     }
 
     void updateHud()

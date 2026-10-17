@@ -417,6 +417,9 @@ void testSpawnRules(TestContext* pCtx)
     CHECK(!simSpawnUnit(s, TEAM_PLAYER, UNIT_MELEE, -1.0f, 10.0f)); // outside the world
     CHECK(!simSpawnUnit(s, TEAM_PLAYER, UNIT_MELEE, 10.0f, 50.0f));
     CHECK(!simSpawnUnit(s, TEAM_PLAYER, UNIT_MELEE, NAN, 10.0f));
+    CHECK(!simSpawnUnit(s, TEAM_PLAYER, UNIT_NONE, 10.0f, 10.0f));             // not a unit type
+    CHECK(!simSpawnUnit(s, TEAM_PLAYER, (UnitType)UNIT_TYPE_COUNT, 10.0f, 10.0f));
+    CHECK(!simSpawnUnit(s, (Team)TEAM_COUNT, UNIT_MELEE, 10.0f, 10.0f));        // not a team
     CHECK(simSpawnUnit(s, TEAM_ENEMY, UNIT_TANK, 20.0f, 20.0f));
     CHECK(simSpawnUnit(s, TEAM_ENEMY, UNIT_RANGED, 21.0f, 20.0f));
     CHECK(simSpawnUnit(s, TEAM_ENEMY, UNIT_RANGED, 22.0f, 20.0f));
@@ -466,6 +469,24 @@ void testSandboxBattle(TestContext* pCtx)
     CHECK(simGetUnitCount(s, TEAM_PLAYER) == 100u && simGetUnitCount(s, TEAM_ENEMY) == 100u);
     simFillRenderData(s, &data);
     bool nobodyDances = true;
+    for (uint32_t i = 0; i < data.mUnitCount; ++i)
+        nobodyDances = nobodyDances && data.pUnitAnims[i].mClip != ANIM_DANCE;
+    CHECK(nobodyDances);
+
+    // Restarting with projectiles in flight and a celebration on clears both.
+    simClear(s, 80.0f);
+    spawnBlock(s, TEAM_PLAYER, UNIT_RANGED, 8, 7);
+    spawnBlock(s, TEAM_ENEMY, UNIT_TANK, 8, 8);
+    for (int32_t i = 0; i < 60 && simGetProjectileCount(s) == 0u; ++i)
+        simStep(s, 1.0f / 60.0f);
+    CHECK(simGetProjectileCount(s) > 0u);
+    simSetCelebratingTeam(s, TEAM_PLAYER);
+    CHECK(gameModeSandboxStart(&mode, s, 100));
+    CHECK(simGetProjectileCount(s) == 0u && gameModeGetWinner(&mode) == -1);
+    gameModeUpdate(&mode, 1.0f / 60.0f); // no stale projectile entity survives to hit anyone
+    CHECK(simGetProjectileCount(s) == 0u);
+    simFillRenderData(s, &data);
+    nobodyDances = true;
     for (uint32_t i = 0; i < data.mUnitCount; ++i)
         nobodyDances = nobodyDances && data.pUnitAnims[i].mClip != ANIM_DANCE;
     CHECK(nobodyDances);

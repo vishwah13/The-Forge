@@ -69,7 +69,7 @@ void       simDestroy(BattleSim* pSim);
 
 // Removes every unit and projectile and sets the world to a worldSize square (clamped to MAX_WORLD_SIZE).
 void simClear(BattleSim* pSim, float worldSize);
-// Adds one unit. Refused (false) at the unit capacity or outside the world.
+// Adds one unit. Refused (false) at the unit capacity, outside the world, or for an invalid type or team.
 bool simSpawnUnit(BattleSim* pSim, Team team, UnitType type, float x, float z);
 // Advances movement and combat by deltaTime. Ignores NaN and non-positive steps; clamps to MAX_STEP.
 void simStep(BattleSim* pSim, float deltaTime);

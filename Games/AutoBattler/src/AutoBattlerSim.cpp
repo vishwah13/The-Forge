@@ -7,6 +7,8 @@
 
 #include "../../../Common_3/Game/ThirdParty/OpenSource/flecs/flecs.h"
 #include "../../../Common_3/Utilities/Interfaces/ILog.h"
+#include "../../../Common_3/Utilities/Interfaces/ITime.h"
+#include "../../../Common_3/Utilities/Threading/Atomics.h"
 
 #include "../../../Common_3/Utilities/Interfaces/IMemory.h"
 
@@ -123,6 +125,17 @@ struct BattleSim
     uint32_t     mUnitCapacity;
     float        mWorldSize; // ARENA_SIZE, or larger during a stress run
     SpatialGrid  mGrid;
+    SimTimings   mTimings;
+    tfrg_atomic64_t mSteerCpuUs; // SteerSystem runs on worker threads, so its sum is kept atomically
+};
+
+// Adds the scope's wall-clock time to *pAccumulator.
+struct ScopedUSec
+{
+    int64_t* pAccumulator;
+    int64_t  mStart;
+    explicit ScopedUSec(int64_t* pAcc): pAccumulator(pAcc), mStart(getUSec(true)) {}
+    ~ScopedUSec() { *pAccumulator += getUSec(true) - mStart; }
 };
 
 //--------------------------------------------------------------------------------------------
@@ -474,7 +487,8 @@ static void applyDamage(ecs_world_t* pWorld, ecs_entity_t target, float damage)
 // Multithreaded: writes only its own entity's components and reads others from the grid snapshot.
 static void SteerSystem(ecs_iter_t* it)
 {
-    const BattleSim*   p = (const BattleSim*)it->ctx;
+    BattleSim*         p = (BattleSim*)it->ctx;
+    const int64_t      startUs = getUSec(true);
     const SpatialGrid& g = p->mGrid;
     Position*          pos = ecs_field(it, Position, 0);
     Unit*              unit = ecs_field(it, Unit, 1);
@@ -530,12 +544,14 @@ static void SteerSystem(ecs_iter_t* it)
         pos[i].x = clampf(pos[i].x + vx * dt, r, p->mWorldSize - r);
         pos[i].z = clampf(pos[i].z + vz * dt, r, p->mWorldSize - r);
     }
+    tfrg_atomic64_add_relaxed(&p->mSteerCpuUs, (uint64_t)(getUSec(true) - startUs));
 }
 
 // Single-threaded: damages other entities and spawns projectiles.
 static void AttackSystem(ecs_iter_t* it)
 {
     BattleSim*      p = (BattleSim*)it->ctx;
+    ScopedUSec      timer(&p->mTimings.mAttackUs);
     const Position* pos = ecs_field(it, Position, 0);
     const Unit*     unit = ecs_field(it, Unit, 1);
     Attack*         attack = ecs_field(it, Attack, 2);
@@ -570,6 +586,7 @@ static void AttackSystem(ecs_iter_t* it)
 static void ProjectileSystem(ecs_iter_t* it)
 {
     BattleSim*  p = (BattleSim*)it->ctx;
+    ScopedUSec  timer(&p->mTimings.mProjectileUs);
     Projectile* projectile = ecs_field(it, Projectile, 0);
     const float step = PROJECTILE_SPEED * it->delta_time;
 
@@ -600,7 +617,8 @@ static void ProjectileSystem(ecs_iter_t* it)
 
 static void HealthSystem(ecs_iter_t* it)
 {
-    Health* health = ecs_field(it, Health, 0);
+    ScopedUSec timer(&((BattleSim*)it->ctx)->mTimings.mHealthUs);
+    Health*    health = ecs_field(it, Health, 0);
     for (int32_t i = 0; i < it->count; ++i)
     {
         health[i].hitFlash = health[i].hitFlash > 0.0f ? health[i].hitFlash - it->delta_time * 5.0f : 0.0f;
@@ -827,8 +845,15 @@ void simStep(BattleSim* p, float deltaTime)
     case PHASE_BATTLE:
     {
         p->mBattleTime += dt;
-        buildGrid(p);
-        ecs_progress(p->pWorld, dt);
+        {
+            ScopedUSec timer(&p->mTimings.mGridUs);
+            buildGrid(p);
+        }
+        {
+            ScopedUSec timer(&p->mTimings.mSystemsUs);
+            ecs_progress(p->pWorld, dt);
+        }
+        ++p->mTimings.mSteps;
         const uint32_t players = simGetUnitCount(p, TEAM_PLAYER);
         const uint32_t enemies = simGetUnitCount(p, TEAM_ENEMY);
         if (enemies == 0 && players > 0)
@@ -943,6 +968,18 @@ uint32_t simGetProjectileCount(const BattleSim* p) { return p->mProjectileCount;
 uint32_t simGetUnitCapacity(const BattleSim* p) { return p->mUnitCapacity; }
 
 float simGetWorldSize(const BattleSim* p) { return p->mWorldSize; }
+
+void simGetTimings(const BattleSim* p, SimTimings* pOut)
+{
+    *pOut = p->mTimings;
+    pOut->mSteerCpuUs = (int64_t)tfrg_atomic64_load_relaxed(&p->mSteerCpuUs);
+}
+
+void simResetTimings(BattleSim* p)
+{
+    memset(&p->mTimings, 0, sizeof(p->mTimings));
+    tfrg_atomic64_store_relaxed(&p->mSteerCpuUs, 0);
+}
 
 //--------------------------------------------------------------------------------------------
 // Render data

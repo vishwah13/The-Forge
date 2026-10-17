@@ -131,6 +131,22 @@ const char* simGetMessage(const BattleSim* pSim);
 uint32_t    simGetUnitCapacity(const BattleSim* pSim);
 float       simGetWorldSize(const BattleSim* pSim); // ARENA_SIZE except during stress runs
 
+// Wall-clock time spent in each part of the battle steps since the last simResetTimings(), summed, in
+// microseconds. mSystemsUs is all of ecs_progress: the multi-threaded SteerSystem plus the single-threaded
+// systems timed separately here, plus Flecs' own scheduling and command merges.
+struct SimTimings
+{
+    int64_t  mGridUs;       // spatial grid rebuild
+    int64_t  mSystemsUs;    // ecs_progress
+    int64_t  mAttackUs;     // AttackSystem
+    int64_t  mProjectileUs; // ProjectileSystem
+    int64_t  mHealthUs;     // HealthSystem
+    int64_t  mSteerCpuUs;   // SteerSystem summed over every worker thread (CPU time, not wall time)
+    uint32_t mSteps;        // battle steps measured
+};
+void simGetTimings(const BattleSim* pSim, SimTimings* pOut);
+void simResetTimings(BattleSim* pSim);
+
 // Writes one UnitInstance and UnitAnim per unit, a health bar per damaged unit and a billboard per projectile.
 // pOut needs room for simGetUnitCapacity() units and simGetUnitCapacity() + MAX_PROJECTILES billboards.
 void simFillRenderData(BattleSim* pSim, RenderData* pOut);

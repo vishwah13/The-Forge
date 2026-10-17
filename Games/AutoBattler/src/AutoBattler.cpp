@@ -176,6 +176,18 @@ uint64_t gStressGpuTriangles = 0; // sums over measured frames
 uint64_t gStressLodUnits[UNIT_LOD_COUNT] = {};
 int64_t  gStressWorstMismatch = 0; // gpu - cpu triangles
 char     gStressReport[4096] = {};
+// CPU work outside the sim, timed per measured run for the breakdown table.
+enum StressAppPhase
+{
+    APP_FILL = 0, // simFillRenderData
+    APP_POSE,     // (clip, time) -> pose offset per unit
+    APP_UPLOAD,   // memcpy of uniforms, instances and billboards into mapped buffers
+    APP_CPU_CULL, // cullOnCpu, the stress-only reference for the GPU cull
+    APP_PHASE_COUNT
+};
+int64_t  gStressAppUs[APP_PHASE_COUNT] = {};
+uint32_t gSimThreads = 1; // Flecs worker threads the sim was created with
+char    gStressBreakdown[4096] = {};
 
 UIComponent* pGuiWindow = NULL;
 int32_t      gSelectedType = UNIT_MELEE;
@@ -382,7 +394,8 @@ ab_zoom; buttonanalog; MOUSE_WHEEL_DOWN; 1.0f; MOUSE_WHEEL_UP; -1.0f)");
         gRenderData.pUnitAnims = (UnitAnim*)tf_malloc(sizeof(UnitAnim) * unitCapacity);
 
         const uint32_t cores = getNumCPUCores();
-        pSim = simCreate(cores > 1 ? cores - 1 : 1, unitCapacity);
+        gSimThreads = cores > 1 ? cores - 1 : 1;
+        pSim = simCreate(gSimThreads, unitCapacity);
 
         waitForAllResourceLoads();
         if (!addUnitLods())
@@ -576,14 +589,18 @@ ab_zoom; buttonanalog; MOUSE_WHEEL_DOWN; 1.0f; MOUSE_WHEEL_UP; -1.0f)");
         updateCameraInput(deltaTime);
         updateCamera(deltaTime);
         updatePicking();
+        int64_t phaseStartUs = getUSec(true);
         simFillRenderData(pSim, &gRenderData);
+        gStressAppUs[APP_FILL] += getUSec(true) - phaseStartUs;
         updateCullUniforms();
         // The sim says which clip and time each unit plays; turn that into its pose in the baked table.
+        phaseStartUs = getUSec(true);
         for (uint32_t i = 0; i < gRenderData.mUnitCount; ++i)
         {
             const BakedPose pose = bakedPose(gBaked, gRenderData.pUnitAnims[i].mClip, gRenderData.pUnitAnims[i].mTime);
             gRenderData.pUnits[i].mPose = packUnitPose(pose.mOffset, pose.mBlend);
         }
+        gStressAppUs[APP_POSE] += getUSec(true) - phaseStartUs;
         updateHud();
     }
 
@@ -750,6 +767,14 @@ ab_zoom; buttonanalog; MOUSE_WHEEL_DOWN; 1.0f; MOUSE_WHEEL_UP; -1.0f)");
                 snprintf(gStressReport, sizeof(gStressReport),
                          "# units  view   world_m  frame_ms  sim_ms  gpu_ms  fps   lod0   lod1   lod2  gpu_mtris  worst_gpu_minus_cpu_tris  "
                          "alive_at_end\n");
+            if (gStressRun == 0)
+                snprintf(gStressBreakdown, sizeof(gStressBreakdown),
+                         "\n# CPU breakdown, ms per frame. steer_ecs = ecs_progress minus the three single-threaded systems\n"
+                         "# (SteerSystem on worker threads plus Flecs scheduling and merges). cpu_cull runs only in --stress.\n"
+                         "# steer_cpu = SteerSystem's CPU time summed over all %u sim threads; steer_cpu / threads vs steer_ecs shows\n"
+                         "# how much of steer_ecs is work and how much is waiting.\n"
+                         "# units  view    grid  steer_ecs  steer_cpu  attack  projectile  health    fill    pose  upload  cpu_cull\n",
+                         gSimThreads);
             simStressSetup(pSim, STRESS_TIERS[tier] / 2);
             const float worldSize = simGetWorldSize(pSim);
             gCameraTarget = view == 0 ? float2(0.5f * worldSize, 0.45f * worldSize) : float2(0.5f * worldSize, 0.5f * worldSize);
@@ -764,6 +789,8 @@ ab_zoom; buttonanalog; MOUSE_WHEEL_DOWN; 1.0f; MOUSE_WHEEL_UP; -1.0f)");
             gStressGpuTriangles = 0;
             memset(gStressLodUnits, 0, sizeof(gStressLodUnits));
             gStressWorstMismatch = 0;
+            simResetTimings(pSim);
+            memset(gStressAppUs, 0, sizeof(gStressAppUs));
         }
         else if (gStressFrame > STRESS_WARMUP_FRAMES)
         {
@@ -788,10 +815,22 @@ ab_zoom; buttonanalog; MOUSE_WHEEL_DOWN; 1.0f; MOUSE_WHEEL_UP; -1.0f)");
                  1000.0f / frameMs, (double)gStressLodUnits[0] / frames, (double)gStressLodUnits[1] / frames,
                  (double)gStressLodUnits[2] / frames, (double)gStressGpuTriangles / frames / 1e6, (long long)gStressWorstMismatch,
                  simGetUnitCount(pSim, TEAM_PLAYER) + simGetUnitCount(pSim, TEAM_ENEMY));
+        SimTimings sim = {};
+        simGetTimings(pSim, &sim);
+        const double toMs = 1.0 / 1000.0 / frames;
+        const size_t usedBreakdown = strlen(gStressBreakdown);
+        snprintf(gStressBreakdown + usedBreakdown, sizeof(gStressBreakdown) - usedBreakdown,
+                 "%7u  %-5s  %6.2f  %9.2f  %9.2f  %6.2f  %10.2f  %6.2f  %6.2f  %6.2f  %6.2f  %8.2f\n", STRESS_TIERS[tier], STRESS_VIEWS[view],
+                 sim.mGridUs * toMs, (sim.mSystemsUs - sim.mAttackUs - sim.mProjectileUs - sim.mHealthUs) * toMs, sim.mSteerCpuUs * toMs,
+                 sim.mAttackUs * toMs,
+                 sim.mProjectileUs * toMs, sim.mHealthUs * toMs, gStressAppUs[APP_FILL] * toMs, gStressAppUs[APP_POSE] * toMs,
+                 gStressAppUs[APP_UPLOAD] * toMs, gStressAppUs[APP_CPU_CULL] * toMs);
         ++gStressRun;
         gStressFrame = 0;
         if (gStressRun == STRESS_RUNS)
         {
+            const size_t reportLength = strlen(gStressReport);
+            snprintf(gStressReport + reportLength, sizeof(gStressReport) - reportLength, "%s", gStressBreakdown);
             writeTextFile("AutoBattler_stress.txt", gStressReport);
             requestShutdown();
         }
@@ -904,10 +943,13 @@ ab_zoom; buttonanalog; MOUSE_WHEEL_DOWN; 1.0f; MOUSE_WHEEL_UP; -1.0f)");
                 gGpuCpuMismatch = (int64_t)gGpuTriangles - (int64_t)gCpuTriangles[gFrameIndex];
             }
             // The reference is only needed while measuring; it costs a pass over every unit.
+            const int64_t cullStartUs = getUSec(true);
             gCpuTriangles[gFrameIndex] = gStressMode ? cullOnCpu(gCpuLodUnits) : 0;
+            gStressAppUs[APP_CPU_CULL] += getUSec(true) - cullStartUs;
         }
 
         // Upload this frame's data (after the fence, so the GPU is done with these buffers).
+        const int64_t    uploadStartUs = getUSec(true);
         BufferUpdateDesc frameUpdate = { pFrameUniformBuffers[gFrameIndex] };
         beginUpdateResource(&frameUpdate);
         memcpy(frameUpdate.pMappedData, &gFrameUniforms, sizeof(gFrameUniforms));
@@ -929,6 +971,7 @@ ab_zoom; buttonanalog; MOUSE_WHEEL_DOWN; 1.0f; MOUSE_WHEEL_UP; -1.0f)");
             memcpy(billboardUpdate.pMappedData, gRenderData.pBillboards, sizeof(BillboardInstance) * gRenderData.mBillboardCount);
             endUpdateResource(&billboardUpdate);
         }
+        gStressAppUs[APP_UPLOAD] += getUSec(true) - uploadStartUs;
 
         RenderTarget* pRenderTarget = pSwapChain->ppRenderTargets[swapchainImageIndex];
         Cmd*          cmd = elem.pCmds[0];

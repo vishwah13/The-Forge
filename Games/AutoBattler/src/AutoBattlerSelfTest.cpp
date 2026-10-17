@@ -349,6 +349,29 @@ static void testThreadCountDoesNotChangeOutcome(TestContext* pCtx)
     CHECK(single.mPlayerHp == multi.mPlayerHp);
 }
 
+static void testStepTimings(TestContext* pCtx)
+{
+    BattleSim* s = simCreate(2, 8192);
+    CHECK(simStressSetup(s, 4096));
+    simResetTimings(s);
+    SimTimings t = {};
+    simGetTimings(s, &t);
+    CHECK(t.mSteps == 0u && t.mGridUs == 0 && t.mSystemsUs == 0 && t.mAttackUs == 0 && t.mProjectileUs == 0 && t.mHealthUs == 0);
+
+    stepFor(s, 0.5f); // 30 battle steps on 8k units: every phase takes measurable time
+    simGetTimings(s, &t);
+    CHECK(t.mSteps == 30u);
+    CHECK(t.mGridUs > 0 && t.mSystemsUs > 0);
+    CHECK(t.mSteerCpuUs > 0); // summed over the worker threads that ran SteerSystem
+    CHECK(t.mAttackUs >= 0 && t.mProjectileUs >= 0 && t.mHealthUs >= 0);
+    CHECK(t.mSystemsUs >= t.mAttackUs + t.mProjectileUs + t.mHealthUs); // the single-threaded systems run inside ecs_progress
+
+    simResetTimings(s);
+    simGetTimings(s, &t);
+    CHECK(t.mSteps == 0u && t.mSystemsUs == 0 && t.mSteerCpuUs == 0);
+    simDestroy(s);
+}
+
 static RenderData allocRenderData(uint32_t unitCapacity = MAX_UNITS)
 {
     RenderData data = {};
@@ -841,6 +864,7 @@ int runAutoBattlerSelfTest(const char* pResultFileName)
         { "baked pose blend", testBakedPoseBlend },
         { "animation state", testAnimationState },
         { "stress setup", testStressSetup },
+        { "step timings", testStepTimings },
         { "unit culling", testUnitCulling },
         { "unit LOD selection", testUnitLodSelection },
         { "unit LOD build", testUnitLodBuild },

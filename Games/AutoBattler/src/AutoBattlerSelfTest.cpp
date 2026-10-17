@@ -338,6 +338,41 @@ static BattleOutcome runScriptedBattle(uint32_t threads)
     return outcome;
 }
 
+struct StressOutcome
+{
+    uint32_t mPlayers;
+    uint32_t mEnemies;
+    float    mPlayerHp;
+    float    mEnemyHp;
+    float    mPlayerMinDistance; // depends on every player position
+    float    mEnemyMinDistance;
+    float    mPlayerStartHp;
+};
+
+static StressOutcome runStressBattle(uint32_t threads)
+{
+    BattleSim* s = simCreate(threads, 8192);
+    simStressSetup(s, 4096); // 8k units, many steering chunks
+    const float startHp = simTestTotalHp(s, TEAM_PLAYER);
+    stepFor(s, 4.0f); // the armies meet and fight
+    const StressOutcome outcome = { simGetUnitCount(s, TEAM_PLAYER),        simGetUnitCount(s, TEAM_ENEMY),
+                                    simTestTotalHp(s, TEAM_PLAYER),         simTestTotalHp(s, TEAM_ENEMY),
+                                    simTestMinUnitDistance(s, TEAM_PLAYER), simTestMinUnitDistance(s, TEAM_ENEMY),
+                                    startHp };
+    simDestroy(s);
+    return outcome;
+}
+
+static void testThreadCountDoesNotChangeStress(TestContext* pCtx)
+{
+    const StressOutcome single = runStressBattle(1);
+    const StressOutcome multi = runStressBattle(6);
+    CHECK(single.mPlayers == multi.mPlayers && single.mEnemies == multi.mEnemies);
+    CHECK(single.mPlayerHp == multi.mPlayerHp && single.mEnemyHp == multi.mEnemyHp);
+    CHECK(single.mPlayerMinDistance == multi.mPlayerMinDistance && single.mEnemyMinDistance == multi.mEnemyMinDistance);
+    CHECK(single.mPlayerHp < single.mPlayerStartHp); // the armies did fight
+}
+
 static void testThreadCountDoesNotChangeOutcome(TestContext* pCtx)
 {
     const BattleOutcome single = runScriptedBattle(1);
@@ -356,19 +391,20 @@ static void testStepTimings(TestContext* pCtx)
     simResetTimings(s);
     SimTimings t = {};
     simGetTimings(s, &t);
-    CHECK(t.mSteps == 0u && t.mGridUs == 0 && t.mSystemsUs == 0 && t.mAttackUs == 0 && t.mProjectileUs == 0 && t.mHealthUs == 0);
+    CHECK(t.mSteps == 0u && t.mGridUs == 0 && t.mSteerUs == 0 && t.mSystemsUs == 0 && t.mAttackUs == 0 && t.mProjectileUs == 0 &&
+          t.mHealthUs == 0);
 
     stepFor(s, 0.5f); // 30 battle steps on 8k units: every phase takes measurable time
     simGetTimings(s, &t);
     CHECK(t.mSteps == 30u);
-    CHECK(t.mGridUs > 0 && t.mSystemsUs > 0);
+    CHECK(t.mGridUs > 0 && t.mSteerUs > 0 && t.mSystemsUs > 0);
     CHECK(t.mSteerCpuUs > 0); // summed over the worker threads that ran SteerSystem
     CHECK(t.mAttackUs >= 0 && t.mProjectileUs >= 0 && t.mHealthUs >= 0);
     CHECK(t.mSystemsUs >= t.mAttackUs + t.mProjectileUs + t.mHealthUs); // the single-threaded systems run inside ecs_progress
 
     simResetTimings(s);
     simGetTimings(s, &t);
-    CHECK(t.mSteps == 0u && t.mSystemsUs == 0 && t.mSteerCpuUs == 0);
+    CHECK(t.mSteps == 0u && t.mSteerUs == 0 && t.mSystemsUs == 0 && t.mSteerCpuUs == 0);
     simDestroy(s);
 }
 
@@ -857,6 +893,7 @@ int runAutoBattlerSelfTest(const char* pResultFileName)
         { "delta time clamp", testDeltaTimeClamp },
         { "restart mid battle", testRestartMidBattle },
         { "thread count does not change outcome", testThreadCountDoesNotChangeOutcome },
+        { "thread count does not change a stress battle", testThreadCountDoesNotChangeStress },
         { "render data in prep", testRenderDataPrep },
         { "render data in battle", testRenderDataBattle },
         { "unit instance packing", testUnitInstancePacking },

@@ -9,6 +9,7 @@
 #include "../../../Common_3/Utilities/Interfaces/ILog.h"
 #include "../../../Common_3/Utilities/Interfaces/ITime.h"
 #include "../../../Common_3/Utilities/Threading/Atomics.h"
+#include "../../../Common_3/Utilities/Threading/ThreadSystem.h"
 
 #include "../../../Common_3/Utilities/Interfaces/IMemory.h"
 
@@ -92,7 +93,7 @@ struct GridEntry
 };
 
 // Per-frame snapshot of every unit, sorted by bucket. Systems read positions of *other* units only
-// from here, so the multithreaded steering system never reads data another thread is writing.
+// from here, so steering (run on several threads) never reads data another thread is writing.
 struct SpatialGrid
 {
     GridEntry* pEntries;      // unit capacity, sorted by bucket
@@ -113,6 +114,7 @@ struct BattleSim
     ecs_world_t* pWorld;
     ecs_query_t* pUnitQuery; // Position, Unit, Health
     ecs_query_t* pProjectileQuery;
+    ecs_query_t* pSteerQuery; // Position, Unit, Attack
     int8_t       mBoard[ARENA_CELLS * ARENA_CELLS]; // UnitType per cell, UNIT_NONE when empty
     Phase        mPhase;
     int32_t      mRound;
@@ -126,8 +128,28 @@ struct BattleSim
     float        mWorldSize; // ARENA_SIZE, or larger during a stress run
     SpatialGrid  mGrid;
     SimTimings   mTimings;
-    tfrg_atomic64_t mSteerCpuUs; // SteerSystem runs on worker threads, so its sum is kept atomically
+    tfrg_atomic64_t mSteerCpuUs; // steering runs on several threads, so its sum is kept atomically
+    ThreadSystem    pThreads;    // steering workers; NULL when the sim is single-threaded
+    uint32_t        mWorkerCount;
+    struct SteerChunk* pSteerChunks;
+    uint32_t           mSteerChunkCapacity;
+    uint32_t           mSteerChunkCount;
+    tfrg_atomic32_t    mNextSteerChunk; // next chunk a thread takes
 };
+
+// A run of up to STEER_CHUNK_SIZE consecutive units in one Flecs table. Steering is handed out in these
+// small chunks so threads that finish early take more work instead of waiting for the busiest slice.
+struct SteerChunk
+{
+    BattleSim*          p;
+    Position*           pPos;
+    Unit*               pUnit;
+    Attack*             pAttack;
+    const ecs_entity_t* pEntities;
+    int32_t             mCount;
+    float               mDt;
+};
+static const int32_t STEER_CHUNK_SIZE = 256;
 
 // Adds the scope's wall-clock time to *pAccumulator.
 struct ScopedUSec
@@ -484,23 +506,27 @@ static void applyDamage(ecs_world_t* pWorld, ecs_entity_t target, float damage)
     }
 }
 
-// Multithreaded: writes only its own entity's components and reads others from the grid snapshot.
-static void SteerSystem(ecs_iter_t* it)
+// Steers one chunk of units. Reads other units only from the grid snapshot (and read-only lookups of
+// their GridSlot), writes only its own units, so chunks run in parallel and in any order.
+static void steerChunk(void* pUser, uint64_t)
 {
-    BattleSim*         p = (BattleSim*)it->ctx;
-    const int64_t      startUs = getUSec(true);
-    const SpatialGrid& g = p->mGrid;
-    Position*          pos = ecs_field(it, Position, 0);
-    Unit*              unit = ecs_field(it, Unit, 1);
-    Attack*            attack = ecs_field(it, Attack, 2);
-    const float        dt = it->delta_time;
+    const SteerChunk&   c = *(const SteerChunk*)pUser;
+    BattleSim*          p = c.p;
+    const int64_t       startUs = getUSec(true);
+    const SpatialGrid&  g = p->mGrid;
+    const ecs_world_t*  world = p->pWorld;
+    Position*           pos = c.pPos;
+    Unit*               unit = c.pUnit;
+    Attack*             attack = c.pAttack;
+    const ecs_entity_t* entities = c.pEntities;
+    const float         dt = c.mDt;
 
-    for (int32_t i = 0; i < it->count; ++i)
+    for (int32_t i = 0; i < c.mCount; ++i)
     {
         const UnitStats& stats = gUnitStats[unit[i].type];
         Attack&          a = attack[i];
 
-        const GridEntry* pTarget = lookupTarget(it->world, g, a.target);
+        const GridEntry* pTarget = lookupTarget(world, g, a.target);
         a.retargetTimer -= dt;
         if (!pTarget || a.retargetTimer <= 0.0f)
         {
@@ -531,7 +557,7 @@ static void SteerSystem(ecs_iter_t* it)
 
         float sx = 0.0f;
         float sz = 0.0f;
-        separation(g, it->entities[i], pos[i].x, pos[i].z, unit[i].radius, &sx, &sz);
+        separation(g, entities[i], pos[i].x, pos[i].z, unit[i].radius, &sx, &sz);
         vx += sx * SEPARATION_SPEED;
         vz += sz * SEPARATION_SPEED;
 
@@ -627,6 +653,57 @@ static void HealthSystem(ecs_iter_t* it)
     }
 }
 
+// Takes chunks off the shared counter until every chunk has been steered.
+static void steerWorker(void* pUser, uint64_t)
+{
+    BattleSim* p = (BattleSim*)pUser;
+    for (;;)
+    {
+        const uint32_t chunk = tfrg_atomic32_add_relaxed(&p->mNextSteerChunk, 1);
+        if (chunk >= p->mSteerChunkCount)
+            return;
+        steerChunk(&p->pSteerChunks[chunk], 0);
+    }
+}
+
+// Splits every unit table into chunks and steers them on the thread pool, the calling thread helping.
+static void steerUnits(BattleSim* p, float dt)
+{
+    uint32_t   chunkCount = 0;
+    ecs_iter_t it = ecs_query_iter(p->pWorld, p->pSteerQuery);
+    while (ecs_query_next(&it))
+    {
+        Position* pos = ecs_field(&it, Position, 0);
+        Unit*     unit = ecs_field(&it, Unit, 1);
+        Attack*   attack = ecs_field(&it, Attack, 2);
+        for (int32_t first = 0; first < it.count; first += STEER_CHUNK_SIZE)
+        {
+            if (chunkCount == p->mSteerChunkCapacity)
+            {
+                p->mSteerChunkCapacity = p->mSteerChunkCapacity ? 2 * p->mSteerChunkCapacity : 64;
+                p->pSteerChunks = (SteerChunk*)tf_realloc(p->pSteerChunks, sizeof(SteerChunk) * p->mSteerChunkCapacity);
+            }
+            SteerChunk& c = p->pSteerChunks[chunkCount++];
+            c.p = p;
+            c.pPos = pos + first;
+            c.pUnit = unit + first;
+            c.pAttack = attack + first;
+            c.pEntities = it.entities + first;
+            c.mCount = it.count - first < STEER_CHUNK_SIZE ? it.count - first : STEER_CHUNK_SIZE;
+            c.mDt = dt;
+        }
+    }
+    p->mSteerChunkCount = chunkCount;
+    tfrg_atomic32_store_relaxed(&p->mNextSteerChunk, 0);
+    // One task per worker; each worker and this thread take chunks until none are left. (Not one task per
+    // chunk with threadSystemAssist: Assist blocks waiting for work once the queue is empty.)
+    if (p->pThreads)
+        threadSystemAddTasks(p->pThreads, steerWorker, p->mWorkerCount, 0, p);
+    steerWorker(p, 0);
+    if (p->pThreads)
+        threadSystemWaitIdle(p->pThreads);
+}
+
 static void addSystem(BattleSim* p, const char* pName, ecs_entity_t phase, ecs_iter_action_t callback, bool multiThreaded, ecs_id_t c0,
                       ecs_id_t c1 = 0, ecs_id_t c2 = 0)
 {
@@ -688,7 +765,20 @@ BattleSim* simCreate(uint32_t threadCount, uint32_t unitCapacity)
 
     BattleSim* p = (BattleSim*)tf_calloc(1, sizeof(BattleSim));
     p->pWorld = ecs_init();
-    ecs_set_threads(p->pWorld, (int32_t)(threadCount > 0 ? threadCount : 1));
+    if (threadCount > 1)
+    {
+        ThreadSystemInitDesc threadDesc = gThreadSystemInitDescDefault;
+        threadDesc.threadCount = threadCount - 1; // the caller steers too
+        threadDesc.threadName = "AutoBattler steer";
+        if (threadSystemInit(&p->pThreads, &threadDesc) && p->pThreads)
+        {
+            ThreadSystemInfo info = {};
+            threadSystemGetInfo(p->pThreads, &info);
+            p->mWorkerCount = (uint32_t)info.threadCount; // clamped to the core count
+        }
+        else
+            p->pThreads = NULL; // falls back to steering on the calling thread
+    }
 
     AB_DEFINE_COMPONENT(p->pWorld, Position);
     AB_DEFINE_COMPONENT(p->pWorld, Unit);
@@ -707,6 +797,12 @@ BattleSim* simCreate(uint32_t threadCount, uint32_t unitCapacity)
     projectileQuery.terms[0].id = ecs_id(Projectile);
     p->pProjectileQuery = ecs_query_init(p->pWorld, &projectileQuery);
 
+    ecs_query_desc_t steerQuery = {};
+    steerQuery.terms[0].id = ecs_id(Position);
+    steerQuery.terms[1].id = ecs_id(Unit);
+    steerQuery.terms[2].id = ecs_id(Attack);
+    p->pSteerQuery = ecs_query_init(p->pWorld, &steerQuery);
+
     // Size the grid for the largest stress world this capacity allows.
     uint32_t cols = 0;
     uint32_t rows = 0;
@@ -723,7 +819,6 @@ BattleSim* simCreate(uint32_t threadCount, uint32_t unitCapacity)
         p->mGrid.pEnemyRings[team] = (uint16_t*)tf_malloc(sizeof(uint16_t) * bucketCount);
 
     // Declaration order is execution order within a phase.
-    addSystem(p, "SteerSystem", EcsOnUpdate, SteerSystem, true, ecs_id(Position), ecs_id(Unit), ecs_id(Attack));
     addSystem(p, "AttackSystem", EcsOnUpdate, AttackSystem, false, ecs_id(Position), ecs_id(Unit), ecs_id(Attack));
     addSystem(p, "ProjectileSystem", EcsOnUpdate, ProjectileSystem, false, ecs_id(Projectile));
     addSystem(p, "HealthSystem", EcsPostUpdate, HealthSystem, false, ecs_id(Health));
@@ -738,7 +833,11 @@ void simDestroy(BattleSim* p)
         return;
     ecs_query_fini(p->pUnitQuery);
     ecs_query_fini(p->pProjectileQuery);
+    ecs_query_fini(p->pSteerQuery);
     ecs_fini(p->pWorld);
+    if (p->pThreads)
+        threadSystemExit(&p->pThreads, &gThreadSystemExitDescDefault);
+    tf_free(p->pSteerChunks);
     tf_free(p->mGrid.pEntries);
     tf_free(p->mGrid.pScratch);
     tf_free(p->mGrid.pBucketStart);
@@ -848,6 +947,10 @@ void simStep(BattleSim* p, float deltaTime)
         {
             ScopedUSec timer(&p->mTimings.mGridUs);
             buildGrid(p);
+        }
+        {
+            ScopedUSec timer(&p->mTimings.mSteerUs);
+            steerUnits(p, dt);
         }
         {
             ScopedUSec timer(&p->mTimings.mSystemsUs);

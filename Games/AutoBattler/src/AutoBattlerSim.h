@@ -97,7 +97,9 @@ struct RenderData
 
 struct BattleSim;
 
-// unitCapacity sizes unit storage; the game itself never exceeds MAX_UNITS, only stress runs use more.
+// threadCount: threads the sim may use, the caller's included (steering runs on threadCount - 1 workers
+// plus the caller). unitCapacity sizes unit storage; the game itself never exceeds MAX_UNITS, only stress
+// runs use more.
 BattleSim* simCreate(uint32_t threadCount, uint32_t unitCapacity = MAX_UNITS);
 void       simDestroy(BattleSim* pSim);
 
@@ -132,16 +134,17 @@ uint32_t    simGetUnitCapacity(const BattleSim* pSim);
 float       simGetWorldSize(const BattleSim* pSim); // ARENA_SIZE except during stress runs
 
 // Wall-clock time spent in each part of the battle steps since the last simResetTimings(), summed, in
-// microseconds. mSystemsUs is all of ecs_progress: the multi-threaded SteerSystem plus the single-threaded
-// systems timed separately here, plus Flecs' own scheduling and command merges.
+// microseconds. mSystemsUs is all of ecs_progress: the single-threaded systems timed separately here plus
+// Flecs' own scheduling and command merges.
 struct SimTimings
 {
     int64_t  mGridUs;       // spatial grid rebuild
+    int64_t  mSteerUs;      // steering, spread over the sim's threads in small chunks
     int64_t  mSystemsUs;    // ecs_progress
     int64_t  mAttackUs;     // AttackSystem
     int64_t  mProjectileUs; // ProjectileSystem
     int64_t  mHealthUs;     // HealthSystem
-    int64_t  mSteerCpuUs;   // SteerSystem summed over every worker thread (CPU time, not wall time)
+    int64_t  mSteerCpuUs;   // steering summed over every thread (CPU time, not wall time)
     uint32_t mSteps;        // battle steps measured
 };
 void simGetTimings(const BattleSim* pSim, SimTimings* pOut);

@@ -772,11 +772,10 @@ ab_zoom; buttonanalog; MOUSE_WHEEL_DOWN; 1.0f; MOUSE_WHEEL_UP; -1.0f)");
                          "alive_at_end\n");
             if (gStressRun == 0)
                 snprintf(gStressBreakdown, sizeof(gStressBreakdown),
-                         "\n# CPU breakdown, ms per frame. steer_ecs = ecs_progress minus the three single-threaded systems\n"
-                         "# (SteerSystem on worker threads plus Flecs scheduling and merges). cpu_cull runs only in --stress.\n"
-                         "# steer_cpu = SteerSystem's CPU time summed over all %u sim threads; steer_cpu / threads vs steer_ecs shows\n"
-                         "# how much of steer_ecs is work and how much is waiting.\n"
-                         "# units  view    grid  steer_ecs  steer_cpu  attack  projectile  health    fill    pose  upload  cpu_cull\n",
+                         "\n# CPU breakdown, ms per frame. steer = steering in chunks on all %u sim threads; steer_cpu = its CPU\n"
+                         "# time summed over those threads (steer_cpu / threads vs steer shows work vs waiting). ecs = ecs_progress\n"
+                         "# minus the three single-threaded systems (Flecs scheduling and merges). cpu_cull runs only in --stress.\n"
+                         "# units  view    grid    steer  steer_cpu     ecs  attack  projectile  health    fill    pose  upload  cpu_cull\n",
                          gSimThreads);
             simStressSetup(pSim, STRESS_TIERS[tier] / 2);
             const float worldSize = simGetWorldSize(pSim);
@@ -823,9 +822,9 @@ ab_zoom; buttonanalog; MOUSE_WHEEL_DOWN; 1.0f; MOUSE_WHEEL_UP; -1.0f)");
         const double toMs = 1.0 / 1000.0 / frames;
         const size_t usedBreakdown = strlen(gStressBreakdown);
         snprintf(gStressBreakdown + usedBreakdown, sizeof(gStressBreakdown) - usedBreakdown,
-                 "%7u  %-5s  %6.2f  %9.2f  %9.2f  %6.2f  %10.2f  %6.2f  %6.2f  %6.2f  %6.2f  %8.2f\n", STRESS_TIERS[tier], STRESS_VIEWS[view],
-                 sim.mGridUs * toMs, (sim.mSystemsUs - sim.mAttackUs - sim.mProjectileUs - sim.mHealthUs) * toMs, sim.mSteerCpuUs * toMs,
-                 sim.mAttackUs * toMs,
+                 "%7u  %-5s  %6.2f  %7.2f  %9.2f  %6.2f  %6.2f  %10.2f  %6.2f  %6.2f  %6.2f  %6.2f  %8.2f\n", STRESS_TIERS[tier],
+                 STRESS_VIEWS[view], sim.mGridUs * toMs, sim.mSteerUs * toMs, sim.mSteerCpuUs * toMs,
+                 (sim.mSystemsUs - sim.mAttackUs - sim.mProjectileUs - sim.mHealthUs) * toMs, sim.mAttackUs * toMs,
                  sim.mProjectileUs * toMs, sim.mHealthUs * toMs, gStressAppUs[APP_FILL] * toMs, gStressAppUs[APP_POSE] * toMs,
                  gStressAppUs[APP_UPLOAD] * toMs, gStressAppUs[APP_CPU_CULL] * toMs);
         ++gStressRun;

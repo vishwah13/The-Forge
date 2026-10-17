@@ -14,7 +14,6 @@ struct Unit
 {
     uint8_t  team;
     uint8_t  type;
-    uint16_t cell; // board cell index, 0xFFFF when not spawned from the board
     float    radius;
     float    yaw;
     float    animTime; // animation clock, offset per unit so crowds are not in lockstep

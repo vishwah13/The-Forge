@@ -25,7 +25,7 @@ void check(TestContext* pCtx, bool ok, const char* pExpr, int32_t line)
 void runBattle(BattleSim* s, float seconds)
 {
     const int32_t steps = (int32_t)(seconds * 60.0f);
-    for (int32_t i = 0; i < steps && simGetPhase(s) == PHASE_BATTLE; ++i)
+    for (int32_t i = 0; i < steps && simGetUnitCount(s, TEAM_PLAYER) > 0u && simGetUnitCount(s, TEAM_ENEMY) > 0u; ++i)
         simStep(s, 1.0f / 60.0f);
 }
 
@@ -67,33 +67,26 @@ int runAutoBattlerSelfTest(const char* pResultFileName)
         return 1;
 
     const NamedTest tests[] = {
-        { "cell math", testCellMath },
-        { "buy and sell", testBuySell },
-        { "unit cap", testUnitCap },
-        { "wave is deterministic", testWaveDeterministic },
-        { "start battle guards", testStartBattleGuards },
-        { "melee battle and next round", testMeleeBattleAndNextRound },
         { "ranged projectiles", testRangedProjectiles },
-        { "defeat and restart", testDefeatAndRestart },
-        { "timeout", testTimeout },
         { "coincident units separate", testCoincidentUnitsSeparate },
         { "delta time clamp", testDeltaTimeClamp },
-        { "restart mid battle", testRestartMidBattle },
         { "thread count does not change outcome", testThreadCountDoesNotChangeOutcome },
         { "thread count does not change a stress battle", testThreadCountDoesNotChangeStress },
         { "flecs delete keeps entity data", testFlecsDeleteKeepsEntityData },
-        { "render data in prep", testRenderDataPrep },
+        { "render data layout", testRenderDataLayout },
         { "render data in battle", testRenderDataBattle },
         { "unit instance packing", testUnitInstancePacking },
         { "skin table", testSkinTable },
         { "baked pose blend", testBakedPoseBlend },
         { "animation state", testAnimationState },
-        { "stress setup", testStressSetup },
+        { "sandbox setup", testSandboxSetup },
         { "step timings", testStepTimings },
         { "unit culling", testUnitCulling },
         { "unit LOD selection", testUnitLodSelection },
         { "unit LOD build", testUnitLodBuild },
         { "nearest enemy search", testNearestEnemySearch },
+        { "spawn rules", testSpawnRules },
+        { "sandbox battle", testSandboxBattle },
     };
     for (uint32_t i = 0; i < sizeof(tests) / sizeof(tests[0]); ++i)
     {

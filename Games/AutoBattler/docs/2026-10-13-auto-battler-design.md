@@ -1,5 +1,7 @@
 # 40_AutoBattler — Design
 
+> Superseded by 2026-10-17-conquest-design.md; the board, phases and waves described here were removed in conquest plan 1.
+
 Date: 2026-10-13
 
 ## Intent

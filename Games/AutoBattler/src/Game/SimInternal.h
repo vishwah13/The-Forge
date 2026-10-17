@@ -44,17 +44,12 @@ struct BattleSim
     ecs_query_t* pUnitQuery; // Position, Unit, Health
     ecs_query_t* pProjectileQuery;
     ecs_query_t* pSteerQuery; // Position, Unit, Attack
-    int8_t       mBoard[ARENA_CELLS * ARENA_CELLS]; // UnitType per cell, UNIT_NONE when empty
-    Phase        mPhase;
-    int32_t      mRound;
-    int32_t      mGold;
-    float        mBattleTime;
-    float        mResultTime;
+    float        mTime; // seconds since the last simClear
     uint32_t     mProjectileCount;
     uint32_t     mSpawnCounter;
-    const char*  pMessage;
     uint32_t     mUnitCapacity;
-    float        mWorldSize; // ARENA_SIZE, or larger during a stress run
+    float        mWorldSize; // set by simClear
+    int32_t      mCelebratingTeam; // plays ANIM_DANCE; -1 for none
     SpatialGrid  mGrid;
     SimTimings   mTimings;
     tfrg_atomic64_t mSteerCpuUs; // steering runs on several threads, so its sum is kept atomically
@@ -106,5 +101,7 @@ void applyDamage(ecs_world_t* pWorld, ecs_entity_t target, float damage);
 void healthRegisterSystems(BattleSim* p);
 
 // Sim.cpp
+// Adds a unit without checks; callers have validated the position and the unit capacity.
+void spawnUnit(BattleSim* p, Team team, UnitType type, float x, float z);
 void addSystem(BattleSim* p, const char* pName, ecs_entity_t phase, ecs_iter_action_t callback, bool multiThreaded, ecs_id_t c0,
                ecs_id_t c1 = 0, ecs_id_t c2 = 0);

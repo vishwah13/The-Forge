@@ -22,6 +22,9 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="..\src\Game\GameMode.cpp">
+      <Filter>Source\Game</Filter>
+    </ClCompile>
     <ClCompile Include="..\src\Tests\SelfTestRender.cpp">
       <Filter>Source\Tests</Filter>
     </ClCompile>
@@ -70,6 +73,9 @@
     <ClCompile Include="..\..\..\Common_3\Game\ThirdParty\OpenSource\flecs\flecs.c">
       <Filter>Source</Filter>
     </ClCompile>
+    <ClInclude Include="..\src\Game\GameMode.h">
+      <Filter>Headers\Game</Filter>
+    </ClInclude>
     <ClInclude Include="..\src\Tests\SelfTest.h">
       <Filter>Headers\Tests</Filter>
     </ClInclude>

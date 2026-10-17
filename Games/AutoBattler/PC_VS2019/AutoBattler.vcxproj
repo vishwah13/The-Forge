@@ -140,6 +140,7 @@
     </FSLShader>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="..\src\Game\GameMode.cpp" />
     <ClCompile Include="..\src\Tests\SelfTestRender.cpp" />
     <ClCompile Include="..\src\Tests\SelfTestSim.cpp" />
     <ClCompile Include="..\src\Tests\SelfTest.cpp" />
@@ -158,6 +159,7 @@
     <ClCompile Include="..\..\..\Common_3\Game\ThirdParty\OpenSource\flecs\flecs.c" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="..\src\Game\GameMode.h" />
     <ClInclude Include="..\src\Tests\SelfTest.h" />
     <ClInclude Include="..\src\App\Render\UnitLod.h" />
     <ClInclude Include="..\src\App\Render\UnitCulling.h" />

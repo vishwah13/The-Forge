@@ -14,8 +14,6 @@ enum UnitType : int8_t
 struct UnitStats
 {
     const char* pName;
-    int32_t     mSquadSide; // a squad is mSquadSide x mSquadSide units
-    int32_t     mCost;
     float       mHp;
     float       mDamage;
     float       mCooldown;

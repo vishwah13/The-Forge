@@ -3,6 +3,7 @@
 
 #include "Render/AnimationBake.h"
 #include "../Game/UnitInstance.h"
+#include "../Game/GameMode.h"
 #include "../Game/Sim.h"
 #include "Render/UnitCulling.h"
 #include "Render/UnitLod.h"
@@ -131,12 +132,14 @@ Rig             gRig; // unit model skeleton
 BakedAnimations gBaked = {};
 
 BattleSim* pSim = NULL;
+GameMode   gMode = {};
+static const uint32_t SANDBOX_UNITS_PER_TEAM = 1400; // 2,800 units, the old smoke battle size
 RenderData gRenderData = {};
 
 // Camera orbits a ground target at a fixed pitch.
 const float CAMERA_PITCH = 55.0f * PI / 180.0f;
 const float CAMERA_FOV_X = PI / 3.0f;
-float2      gCameraTarget = float2(ARENA_SIZE * 0.5f, ARENA_SIZE * 0.45f);
+float2      gCameraTarget = float2(40.0f, 36.0f);
 float       gCameraDistance = 75.0f;
 vec3        gCameraEye;
 vec3        gCameraForward;
@@ -154,7 +157,7 @@ uint32_t gSmokeFrames = 0;
 uint32_t gSmokeResultFrame = 0;
 uint32_t gSmokeStartUnits = 0;
 float    gSmokeSeconds = 0.0f;
-Phase    gSmokeResult = PHASE_PREP;
+int32_t  gSmokeWinner = -1; // Team, or -1 until one army is gone
 
 // --stress: runs ever larger battles on a world sized to each army, writes per-tier timings and quits.
 // The sim advances a fixed STRESS_STEP per frame (slow motion when the frame is slower), so every tier
@@ -191,14 +194,10 @@ uint32_t gSimThreadsOverride = 0; // --sim-threads N; 0 = one per core minus one
 char    gStressBreakdown[4096] = {};
 
 UIComponent* pGuiWindow = NULL;
-int32_t      gSelectedType = UNIT_MELEE;
-bool         gStartRequested = false;
 bool         gRestartRequested = false;
-InputEnum    CUSTOM_PLACE = {};
-InputEnum    CUSTOM_SELL = {};
 InputEnum    CUSTOM_ZOOM = {};
 
-static const char* PHASE_NAMES[] = { "Prep", "Battle", "Victory", "Defeat" };
+static const char* TEAM_NAMES[TEAM_COUNT] = { "Blue", "Red" };
 
 static void writeTextFile(const char* pFileName, const char* pText)
 {
@@ -358,11 +357,7 @@ public:
 
         AddCustomInputBindings();
         inputAddCustomBindings(R"(
-ab_place; button; MOUSE_1; released
-ab_sell; button; MOUSE_2; released
 ab_zoom; buttonanalog; MOUSE_WHEEL_DOWN; 1.0f; MOUSE_WHEEL_UP; -1.0f)");
-        CUSTOM_PLACE = inputGetCustomBindingEnum("ab_place");
-        CUSTOM_SELL = inputGetCustomBindingEnum("ab_sell");
         CUSTOM_ZOOM = inputGetCustomBindingEnum("ab_zoom");
 
         BufferLoadDesc cullDesc = {};
@@ -399,6 +394,7 @@ ab_zoom; buttonanalog; MOUSE_WHEEL_DOWN; 1.0f; MOUSE_WHEEL_UP; -1.0f)");
         const uint32_t cores = getNumCPUCores();
         gSimThreads = gSimThreadsOverride > 0 ? gSimThreadsOverride : (cores > 1 ? cores - 1 : 1);
         pSim = simCreate(gSimThreads, unitCapacity);
+        gameModeSandboxStart(&gMode, pSim, SANDBOX_UNITS_PER_TEAM);
 
         waitForAllResourceLoads();
         if (!addUnitLods())
@@ -575,23 +571,17 @@ ab_zoom; buttonanalog; MOUSE_WHEEL_DOWN; 1.0f; MOUSE_WHEEL_UP; -1.0f)");
         if (gStressMode)
             updateStress(deltaTime);
 
-        if (gStartRequested)
-        {
-            gStartRequested = false;
-            simStartBattle(pSim);
-        }
         if (gRestartRequested)
         {
             gRestartRequested = false;
-            simRestart(pSim);
+            gameModeSandboxStart(&gMode, pSim, gMode.mUnitsPerTeam);
         }
 
         const int64_t simStartUs = getUSec(true);
-        simStep(pSim, gStressMode ? STRESS_STEP : deltaTime);
+        gameModeUpdate(&gMode, gStressMode ? STRESS_STEP : deltaTime);
         gStressSimUs += getUSec(true) - simStartUs;
         updateCameraInput(deltaTime);
         updateCamera(deltaTime);
-        updatePicking();
         int64_t phaseStartUs = getUSec(true);
         simFillRenderData(pSim, &gRenderData);
         gStressAppUs[APP_FILL] += getUSec(true) - phaseStartUs;
@@ -607,7 +597,7 @@ ab_zoom; buttonanalog; MOUSE_WHEEL_DOWN; 1.0f; MOUSE_WHEEL_UP; -1.0f)");
         updateHud();
     }
 
-    // Squad radio buttons, Start Battle / Restart and the LOD debug view; button presses are applied in Update.
+    // Restart and the LOD debug view; button presses are applied in Update.
     void addGui()
     {
         UIComponentDesc guiDesc = {};
@@ -616,21 +606,6 @@ ab_zoom; buttonanalog; MOUSE_WHEEL_DOWN; 1.0f; MOUSE_WHEEL_UP; -1.0f)");
         guiDesc.mFontID = 0;
         guiDesc.mFontSize = 16.0f;
         uiAddComponent("Auto Battler", &guiDesc, &pGuiWindow);
-
-        for (int32_t t = 0; t < UNIT_TYPE_COUNT; ++t)
-        {
-            char label[64];
-            snprintf(label, sizeof(label), "%s squad x%d (%d gold)", gUnitStats[t].pName, gUnitStats[t].mSquadSide * gUnitStats[t].mSquadSide,
-                     gUnitStats[t].mCost);
-            RadioButtonWidget radio = {};
-            radio.pData = &gSelectedType;
-            radio.mRadioId = t;
-            uiAddComponentWidget(pGuiWindow, label, &radio, WIDGET_TYPE_RADIO_BUTTON);
-        }
-
-        ButtonWidget startButton = {};
-        UIWidget*    pStart = uiAddComponentWidget(pGuiWindow, "Start Battle", &startButton, WIDGET_TYPE_BUTTON);
-        uiSetWidgetOnEditedCallback(pStart, NULL, [](void*) { gStartRequested = true; });
 
         ButtonWidget restartButton = {};
         UIWidget*    pRestart = uiAddComponentWidget(pGuiWindow, "Restart", &restartButton, WIDGET_TYPE_BUTTON);
@@ -652,29 +627,6 @@ ab_zoom; buttonanalog; MOUSE_WHEEL_DOWN; 1.0f; MOUSE_WHEEL_UP; -1.0f)");
         gCameraDistance = clampf(gCameraDistance + inputGetValue(0, CUSTOM_ZOOM) * 5.0f, 20.0f, fmaxf(120.0f, 1.5f * worldSize));
     }
 
-    // Casts the mouse ray onto the ground, highlights the cell and buys/sells on click (prep only).
-    void updatePicking()
-    {
-        if (simGetPhase(pSim) != PHASE_PREP || uiIsFocused())
-            return;
-        const float ndcX = 2.0f * inputGetValue(0, CUSTOM_PT_X) / (float)mSettings.mWidth - 1.0f;
-        const float ndcY = 1.0f - 2.0f * inputGetValue(0, CUSTOM_PT_Y) / (float)mSettings.mHeight;
-        const float tanHalfX = tanf(CAMERA_FOV_X * 0.5f);
-        const float tanHalfY = tanHalfX * (float)mSettings.mHeight / (float)mSettings.mWidth;
-        const vec3  dir = normalize(gCameraForward + gCameraRight * (ndcX * tanHalfX) + gCameraUp * (ndcY * tanHalfY));
-
-        int32_t cellX = 0;
-        int32_t cellZ = 0;
-        if (!rayToCell(v3ToF3(gCameraEye), v3ToF3(dir), &cellX, &cellZ))
-            return;
-
-        const bool canBuy = simCanBuySquad(pSim, cellX, cellZ, (UnitType)gSelectedType);
-        gFrameUniforms.mHoverCell = float4((float)cellX, canBuy ? 1.0f : 2.0f, (float)cellZ, CELL_SIZE);
-        if (inputGetValue(0, CUSTOM_PLACE))
-            simBuySquad(pSim, cellX, cellZ, (UnitType)gSelectedType);
-        if (inputGetValue(0, CUSTOM_SELL))
-            simSellSquad(pSim, cellX, cellZ);
-    }
 
     void updateCamera(float deltaTime)
     {
@@ -693,23 +645,16 @@ ab_zoom; buttonanalog; MOUSE_WHEEL_DOWN; 1.0f; MOUSE_WHEEL_UP; -1.0f)");
         gFrameUniforms.mCamUp = float4(v3ToF3(gCameraUp), 0.0f);
         const float worldSize = simGetWorldSize(pSim);
         gFrameUniforms.mArena = float4(worldSize, 0.5f * worldSize, 0.0f, 0.0f); // the enemy half starts halfway
-        gFrameUniforms.mHoverCell = float4(0.0f, 0.0f, 0.0f, CELL_SIZE);
+        gFrameUniforms.mHoverCell = float4(0.0f, 0.0f, 0.0f, 1.0f); // no hover cell (the ground shader rewrite is conquest plan 3)
     }
 
     void updateHud()
     {
-        const Phase phase = simGetPhase(pSim);
-        snprintf(gHudLines[0], sizeof(gHudLines[0]), "Round %d    Gold %d    Blue %u vs Red %u    %s %.0f / %.0f s", simGetRound(pSim),
-                 simGetGold(pSim), simGetUnitCount(pSim, TEAM_PLAYER), simGetUnitCount(pSim, TEAM_ENEMY), PHASE_NAMES[phase],
-                 simGetBattleTime(pSim), BATTLE_TIME_LIMIT);
-        static const char* HINTS[] = {
-            "Left-click your (blue) half to buy the selected squad, right-click to sell. WASD pans, wheel zooms.",
-            "Battle in progress",
-            "VICTORY! Next round starting...",
-            "DEFEAT - press Restart",
-        };
-        snprintf(gHudLines[1], sizeof(gHudLines[1]), "%s", HINTS[phase]);
-        snprintf(gHudLines[2], sizeof(gHudLines[2]), "%s", simGetMessage(pSim));
+        snprintf(gHudLines[0], sizeof(gHudLines[0]), "Sandbox    Blue %u vs Red %u    %.0f s", simGetUnitCount(pSim, TEAM_PLAYER),
+                 simGetUnitCount(pSim, TEAM_ENEMY), simGetTime(pSim));
+        const int32_t winner = gameModeGetWinner(&gMode);
+        snprintf(gHudLines[1], sizeof(gHudLines[1]), "%s", winner >= 0 ? (winner == TEAM_PLAYER ? "Blue wins" : "Red wins") : "WASD pans, wheel zooms");
+        gHudLines[2][0] = 0;
     }
 
     void updateSmoke(float deltaTime)
@@ -718,38 +663,27 @@ ab_zoom; buttonanalog; MOUSE_WHEEL_DOWN; 1.0f; MOUSE_WHEEL_UP; -1.0f)");
             return;
         if (gSmokeFrames == 0)
         {
-            simTestClearBoard(pSim);
-            simTestSetGold(pSim, 100000);
-            for (int32_t x = 0; x < ARENA_CELLS; ++x)
-            {
-                for (int32_t z = 0; z < 3; ++z)
-                    simBuySquad(pSim, x, z, UNIT_MELEE);
-                simBuySquad(pSim, x, 3, UNIT_RANGED);
-                simBuySquad(pSim, x, 4, UNIT_TANK);
-                for (int32_t z = PLAYER_ROWS; z < PLAYER_ROWS + 3; ++z)
-                    simTestSetCell(pSim, x, z, UNIT_MELEE);
-            }
+            gameModeSandboxStart(&gMode, pSim, SANDBOX_UNITS_PER_TEAM);
             gSmokeStartUnits = simGetUnitCount(pSim, TEAM_PLAYER) + simGetUnitCount(pSim, TEAM_ENEMY);
-            simStartBattle(pSim);
             // Frame the front line closely so screenshots show facing, health bars and projectiles.
-            gCameraTarget = float2(ARENA_SIZE * 0.5f, (float)PLAYER_ROWS * CELL_SIZE);
+            gCameraTarget = float2(0.5f * simGetWorldSize(pSim), 0.45f * simGetWorldSize(pSim));
             gCameraDistance = 35.0f;
         }
         ++gSmokeFrames;
         gSmokeSeconds += deltaTime;
 
-        const Phase phase = simGetPhase(pSim);
-        if (gSmokeResult == PHASE_PREP && (phase == PHASE_VICTORY || phase == PHASE_DEFEAT))
+        if (gSmokeWinner < 0 && gameModeGetWinner(&gMode) >= 0)
         {
-            gSmokeResult = phase;
+            gSmokeWinner = gameModeGetWinner(&gMode);
             gSmokeResultFrame = gSmokeFrames;
         }
         // Keep running ~2 s into the result so the dance path is exercised too.
-        if ((gSmokeResult != PHASE_PREP && gSmokeFrames > gSmokeResultFrame + 120) || gSmokeSeconds > 150.0f)
+        if ((gSmokeWinner >= 0 && gSmokeFrames > gSmokeResultFrame + 120) || gSmokeSeconds > 150.0f)
         {
             char summary[256];
             snprintf(summary, sizeof(summary), "units_at_start=%u\nframes=%u\nseconds=%.1f\navg_frame_ms=%.2f\nresult=%s\n", gSmokeStartUnits,
-                     gSmokeFrames, gSmokeSeconds, 1000.0f * gSmokeSeconds / (float)gSmokeFrames, PHASE_NAMES[gSmokeResult]);
+                     gSmokeFrames, gSmokeSeconds, 1000.0f * gSmokeSeconds / (float)gSmokeFrames,
+                     gSmokeWinner >= 0 ? TEAM_NAMES[gSmokeWinner] : "Timeout");
             writeTextFile("AutoBattler_smoke.txt", summary);
             gSmokeDone = true;
             requestShutdown();
@@ -777,7 +711,7 @@ ab_zoom; buttonanalog; MOUSE_WHEEL_DOWN; 1.0f; MOUSE_WHEEL_UP; -1.0f)");
                          "# minus the three single-threaded systems (Flecs scheduling and merges). cpu_cull runs only in --stress.\n"
                          "# units  view    grid    steer  steer_cpu     ecs  attack  projectile  health    fill    pose  upload  cpu_cull\n",
                          gSimThreads);
-            simStressSetup(pSim, STRESS_TIERS[tier] / 2);
+            gameModeSandboxStart(&gMode, pSim, STRESS_TIERS[tier] / 2);
             const float worldSize = simGetWorldSize(pSim);
             gCameraTarget = view == 0 ? float2(0.5f * worldSize, 0.45f * worldSize) : float2(0.5f * worldSize, 0.5f * worldSize);
             gCameraDistance = view == 0 ? 1.1f * worldSize : STRESS_ZOOM_DISTANCE;

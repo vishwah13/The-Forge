@@ -2,9 +2,9 @@
 
 #include <string.h>
 
-#include "../../../Common_3/Tools/ThirdParty/OpenSource/meshoptimizer/src/meshoptimizer.h"
+#include "../../../../../Common_3/Tools/ThirdParty/OpenSource/meshoptimizer/src/meshoptimizer.h"
 
-#include "../../../Common_3/Utilities/Interfaces/IMemory.h"
+#include "../../../../../Common_3/Utilities/Interfaces/IMemory.h"
 
 // Share of LOD0's triangles each level aims for, and the most it may deviate from the original
 // surface, as a fraction of the mesh's extent.

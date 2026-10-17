@@ -140,30 +140,33 @@
     </FSLShader>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="..\src\Tests\SelfTestRender.cpp" />
+    <ClCompile Include="..\src\Tests\SelfTestSim.cpp" />
+    <ClCompile Include="..\src\Tests\SelfTest.cpp" />
+    <ClCompile Include="..\src\App\Render\UnitLod.cpp" />
+    <ClCompile Include="..\src\App\Render\AnimationBake.cpp" />
+    <ClCompile Include="..\src\App\AutoBattler.cpp" />
     <ClCompile Include="..\src\Game\Health.cpp" />
     <ClCompile Include="..\src\Game\Combat.cpp" />
     <ClCompile Include="..\src\Game\Steering.cpp" />
     <ClCompile Include="..\src\Game\SpatialGrid.cpp" />
     <ClCompile Include="..\src\Game\UnitTypes.cpp" />
     <ClCompile Include="..\src\Game\Sim.cpp" />
-    <ClCompile Include="..\src\AutoBattler.cpp" />
-    <ClCompile Include="..\src\AutoBattlerSelfTest.cpp" />
-    <ClCompile Include="..\src\AnimationBake.cpp" />
-    <ClCompile Include="..\src\UnitLod.cpp" />
     <ClCompile Include="..\..\..\Common_3\Tools\ThirdParty\OpenSource\meshoptimizer\src\allocator.cpp" />
     <ClCompile Include="..\..\..\Common_3\Tools\ThirdParty\OpenSource\meshoptimizer\src\simplifier.cpp" />
     <ClCompile Include="..\..\..\Common_3\Tools\ThirdParty\OpenSource\meshoptimizer\src\vcacheoptimizer.cpp" />
     <ClCompile Include="..\..\..\Common_3\Game\ThirdParty\OpenSource\flecs\flecs.c" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="..\src\Tests\SelfTest.h" />
+    <ClInclude Include="..\src\App\Render\UnitLod.h" />
+    <ClInclude Include="..\src\App\Render\UnitCulling.h" />
+    <ClInclude Include="..\src\App\Render\AnimationBake.h" />
     <ClInclude Include="..\src\Game\UnitInstance.h" />
     <ClInclude Include="..\src\Game\UnitTypes.h" />
     <ClInclude Include="..\src\Game\Components.h" />
     <ClInclude Include="..\src\Game\SimInternal.h" />
     <ClInclude Include="..\src\Game\Sim.h" />
-    <ClInclude Include="..\src\AnimationBake.h" />
-    <ClInclude Include="..\src\UnitCulling.h" />
-    <ClInclude Include="..\src\UnitLod.h" />
     <ClInclude Include="..\src\Shaders\FSL\Global.srt.h" />
     <ClInclude Include="..\src\Shaders\FSL\Cull.srt.h" />
     <ClInclude Include="..\src\Shaders\FSL\SharedSets.h" />

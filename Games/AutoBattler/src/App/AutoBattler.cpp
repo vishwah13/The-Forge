@@ -1,42 +1,42 @@
 // AutoBattler: top-down auto battler. Gameplay lives in Game/ (Flecs); this file owns
 // rendering, camera, input and UI.
 
-#include "AnimationBake.h"
-#include "Game/UnitInstance.h"
-#include "Game/Sim.h"
-#include "UnitCulling.h"
-#include "UnitLod.h"
+#include "Render/AnimationBake.h"
+#include "../Game/UnitInstance.h"
+#include "../Game/Sim.h"
+#include "Render/UnitCulling.h"
+#include "Render/UnitLod.h"
 
 #include <stdlib.h>
 #include <string.h>
 
 // Interfaces
-#include "../../../Common_3/Application/Interfaces/IApp.h"
-#include "../../../Common_3/Application/Interfaces/IFont.h"
-#include "../../../Common_3/Application/Interfaces/IProfiler.h"
-#include "../../../Common_3/Application/Interfaces/IUI.h"
-#include "../../../Common_3/OS/Interfaces/IInput.h"
-#include "../../../Common_3/Utilities/Interfaces/IFileSystem.h"
-#include "../../../Common_3/Utilities/Interfaces/ILog.h"
-#include "../../../Common_3/Utilities/Interfaces/IThread.h"
-#include "../../../Common_3/Utilities/Interfaces/ITime.h"
+#include "../../../../Common_3/Application/Interfaces/IApp.h"
+#include "../../../../Common_3/Application/Interfaces/IFont.h"
+#include "../../../../Common_3/Application/Interfaces/IProfiler.h"
+#include "../../../../Common_3/Application/Interfaces/IUI.h"
+#include "../../../../Common_3/OS/Interfaces/IInput.h"
+#include "../../../../Common_3/Utilities/Interfaces/IFileSystem.h"
+#include "../../../../Common_3/Utilities/Interfaces/ILog.h"
+#include "../../../../Common_3/Utilities/Interfaces/IThread.h"
+#include "../../../../Common_3/Utilities/Interfaces/ITime.h"
 
 // Rendering
-#include "../../../Common_3/Graphics/Interfaces/IGraphics.h"
-#include "../../../Common_3/Resources/ResourceLoader/Interfaces/IResourceLoader.h"
-#include "../../../Common_3/Utilities/RingBuffer.h"
+#include "../../../../Common_3/Graphics/Interfaces/IGraphics.h"
+#include "../../../../Common_3/Resources/ResourceLoader/Interfaces/IResourceLoader.h"
+#include "../../../../Common_3/Utilities/RingBuffer.h"
 
 // Animation
-#include "../../../Common_3/Resources/AnimationSystem/Animation/Rig.h"
+#include "../../../../Common_3/Resources/AnimationSystem/Animation/Rig.h"
 
-#include "../../../Common_3/Utilities/Math/MathTypes.h"
+#include "../../../../Common_3/Utilities/Math/MathTypes.h"
 
 // fsl
-#include "../../../Common_3/Graphics/FSL/defaults.h"
-#include "./Shaders/FSL/Cull.srt.h"
-#include "./Shaders/FSL/Global.srt.h"
+#include "../../../../Common_3/Graphics/FSL/defaults.h"
+#include "../Shaders/FSL/Cull.srt.h"
+#include "../Shaders/FSL/Global.srt.h"
 
-#include "../../../Common_3/Utilities/Interfaces/IMemory.h"
+#include "../../../../Common_3/Utilities/Interfaces/IMemory.h"
 
 const uint32_t gDataBufferCount = 2;
 

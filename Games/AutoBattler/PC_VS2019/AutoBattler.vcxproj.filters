@@ -1,6 +1,11 @@
 ﻿<?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup>
+    <Filter Include="Headers\Tests" />
+    <Filter Include="Headers\App\Render" />
+    <Filter Include="Source\Tests" />
+    <Filter Include="Source\App\Render" />
+    <Filter Include="Source\App" />
     <Filter Include="Headers\Game" />
     <Filter Include="Source\Game" />
     <Filter Include="Source">
@@ -17,6 +22,24 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="..\src\Tests\SelfTestRender.cpp">
+      <Filter>Source\Tests</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Tests\SelfTestSim.cpp">
+      <Filter>Source\Tests</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Tests\SelfTest.cpp">
+      <Filter>Source\Tests</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\App\Render\UnitLod.cpp">
+      <Filter>Source\App\Render</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\App\Render\AnimationBake.cpp">
+      <Filter>Source\App\Render</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\App\AutoBattler.cpp">
+      <Filter>Source\App</Filter>
+    </ClCompile>
     <ClCompile Include="..\src\Game\Health.cpp">
       <Filter>Source\Game</Filter>
     </ClCompile>
@@ -35,18 +58,6 @@
     <ClCompile Include="..\src\Game\Sim.cpp">
       <Filter>Source\Game</Filter>
     </ClCompile>
-    <ClCompile Include="..\src\AutoBattler.cpp">
-      <Filter>Source</Filter>
-    </ClCompile>
-    <ClCompile Include="..\src\AutoBattlerSelfTest.cpp">
-      <Filter>Source</Filter>
-    </ClCompile>
-    <ClCompile Include="..\src\AnimationBake.cpp">
-      <Filter>Source</Filter>
-    </ClCompile>
-    <ClCompile Include="..\src\UnitLod.cpp">
-      <Filter>Source</Filter>
-    </ClCompile>
     <ClCompile Include="..\..\..\Common_3\Tools\ThirdParty\OpenSource\meshoptimizer\src\allocator.cpp">
       <Filter>Source</Filter>
     </ClCompile>
@@ -59,6 +70,18 @@
     <ClCompile Include="..\..\..\Common_3\Game\ThirdParty\OpenSource\flecs\flecs.c">
       <Filter>Source</Filter>
     </ClCompile>
+    <ClInclude Include="..\src\Tests\SelfTest.h">
+      <Filter>Headers\Tests</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\App\Render\UnitLod.h">
+      <Filter>Headers\App\Render</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\App\Render\UnitCulling.h">
+      <Filter>Headers\App\Render</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\App\Render\AnimationBake.h">
+      <Filter>Headers\App\Render</Filter>
+    </ClInclude>
     <ClInclude Include="..\src\Game\UnitInstance.h">
       <Filter>Headers\Game</Filter>
     </ClInclude>
@@ -73,15 +96,6 @@
     </ClInclude>
     <ClInclude Include="..\src\Game\Sim.h">
       <Filter>Headers\Game</Filter>
-    </ClInclude>
-    <ClInclude Include="..\src\AnimationBake.h">
-      <Filter>Headers</Filter>
-    </ClInclude>
-    <ClInclude Include="..\src\UnitCulling.h">
-      <Filter>Headers</Filter>
-    </ClInclude>
-    <ClInclude Include="..\src\UnitLod.h">
-      <Filter>Headers</Filter>
     </ClInclude>
     <ClInclude Include="..\src\Shaders\FSL\Global.srt.h">
       <Filter>Headers</Filter>

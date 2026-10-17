@@ -134,6 +134,6 @@ BakedPose bakedPose(const BakedAnimations& baked, AnimClip clip, float time)
     const BakedClip& c = baked.mClips[clip];
     const float      frames = time > 0.0f ? time * BAKE_FPS : 0.0f;
     const float      whole = floorf(frames);
-    const uint32_t   frame = (uint32_t)fmodf(whole, (float)c.mFrameCount);
+    const uint32_t   frame = (uint32_t)whole % c.mFrameCount; // integer modulo: fmodf is slow for 64k units a frame
     return { (c.mFirstFrame + frame) * baked.mJointCount, frames - whole };
 }

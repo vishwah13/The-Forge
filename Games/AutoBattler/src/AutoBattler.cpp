@@ -186,7 +186,8 @@ enum StressAppPhase
     APP_PHASE_COUNT
 };
 int64_t  gStressAppUs[APP_PHASE_COUNT] = {};
-uint32_t gSimThreads = 1; // Flecs worker threads the sim was created with
+uint32_t gSimThreads = 1;         // Flecs worker threads the sim was created with
+uint32_t gSimThreadsOverride = 0; // --sim-threads N; 0 = one per core minus one
 char    gStressBreakdown[4096] = {};
 
 UIComponent* pGuiWindow = NULL;
@@ -221,6 +222,8 @@ public:
                 gSmokeMode = true;
             if (strcmp(argv[i], "--stress") == 0)
                 gStressMode = true;
+            if (strcmp(argv[i], "--sim-threads") == 0 && i + 1 < argc) // overrides the default of one per core minus one
+                gSimThreadsOverride = (uint32_t)atoi(argv[++i]);
         }
 
         gRig.Initialize(RD_ANIMATIONS, UNIT_SKELETON);
@@ -394,7 +397,7 @@ ab_zoom; buttonanalog; MOUSE_WHEEL_DOWN; 1.0f; MOUSE_WHEEL_UP; -1.0f)");
         gRenderData.pUnitAnims = (UnitAnim*)tf_malloc(sizeof(UnitAnim) * unitCapacity);
 
         const uint32_t cores = getNumCPUCores();
-        gSimThreads = cores > 1 ? cores - 1 : 1;
+        gSimThreads = gSimThreadsOverride > 0 ? gSimThreadsOverride : (cores > 1 ? cores - 1 : 1);
         pSim = simCreate(gSimThreads, unitCapacity);
 
         waitForAllResourceLoads();

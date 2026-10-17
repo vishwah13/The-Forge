@@ -58,6 +58,29 @@ Dependencies go one way: App → Game. Nothing in `Game/` includes App or engine
 `gameModeRecruit(type)`. The self test and the `--smoke` autopilot use the same calls, so tests play the
 game the way the player does.
 
+### Code style: Orthodox C++
+
+The project follows [Orthodox C++](https://bkaradzic.github.io/posts/orthodoxc++/): C-like C++ that
+anyone who reads C can follow, using a C++ feature only where it makes the code simpler. The Forge itself is
+written this way, and the existing AutoBattler code already is.
+
+- **Modules are plain structs plus free functions.** Examples are `simCreate(...)` / `simStep(pSim, dt)` and
+  `playerControllerUpdate(&controller, ...)`. There are no classes with member functions, constructors or
+  inheritance. The one exception is `AutoBattler : IApp`, because The Forge requires it.
+- **No virtual functions or interfaces.** GameMode is a concrete module (see Responsibilities), and
+  Campaign versus Sandbox is a setting.
+- **No exceptions, no RTTI.** Failures return `bool` or NULL and are logged with `LOGF`.
+- **No STL containers, strings or streams.** Memory comes from `tf_malloc` / `tf_calloc` / `tf_free`, into
+  fixed-capacity arrays sized at creation (unit capacity, `MAX_PLACES`). Text uses `snprintf`.
+- **C headers:** `<math.h>`, `<string.h>`, `<stdio.h>`; never `<cmath>`, `<cstring>` and the like.
+- **No templates or metaprogramming, lambdas or `auto`.** Flecs systems and thread-pool tasks are `static`
+  functions. Types are spelled out.
+- **Allowed where they make code simpler:** references for in/out parameters, `static_assert` on GPU
+  layouts, `inline` helpers in headers, default arguments, The Forge's vectormath types with their
+  operators, and a small scoped timer (`ScopedUSec`), whose destructor keeps the timing correct across
+  early returns.
+- **Language level:** C++14, the toolchain default The Forge builds with. No feature newer than that.
+
 ### Why there is no Player class or physics engine
 
 - **No Player class.** The king is a flecs entity like every unit, plus a `King` tag. Player state (gold,
@@ -128,7 +151,8 @@ his movement direction, or his target while standing.
 
 ### PlayerController (App)
 
-Once per frame:
+`PlayerController` is a struct holding the camera follow state and last-frame key state, plus free
+functions (`playerControllerInit`, `playerControllerUpdate`). Once per frame:
 - WASD or the left stick gives a move vector relative to the screen, normalised to length ≤ 1.
 - Space (or the right trigger) held means charge. Keys 1, 2, 3 recruit. The mouse wheel zooms.
 - It calls `simSetKingIntent(move, charge)` every frame and `gameModeRecruit(type)` on key press.

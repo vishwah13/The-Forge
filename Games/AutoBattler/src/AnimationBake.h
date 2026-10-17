@@ -27,5 +27,11 @@ struct BakedAnimations
 bool bakeAnimations(Rig* pRig, const GeometryData* pGeom, const char* const pClipFiles[ANIM_CLIP_COUNT], BakedAnimations* pOut);
 void freeBakedAnimations(BakedAnimations* pBaked);
 
-// Index of the first palette matrix for `clip` at `time` seconds (looping).
-uint32_t bakedPaletteOffset(const BakedAnimations& baked, AnimClip clip, float time);
+// Where a unit's pose starts in the baked table for `clip` at `time` seconds (looping), and how far it
+// is towards the next frame.
+struct BakedPose
+{
+    uint32_t mOffset; // first matrix
+    float    mBlend;  // [0,1) towards the frame mJointCount matrices later
+};
+BakedPose bakedPose(const BakedAnimations& baked, AnimClip clip, float time);

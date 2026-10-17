@@ -1,7 +1,7 @@
 #ifndef AUTOBATTLER_H
 #define AUTOBATTLER_H
 
-// Layouts must match FrameUniforms in AutoBattler.cpp and UnitInstance/BillboardInstance in AutoBattlerSim.h.
+// Layouts must match FrameUniforms in AutoBattler.cpp, UnitInstance in UnitInstance.h and BillboardInstance in AutoBattlerSim.h.
 STRUCT(FrameUniforms)
 {
     DATA(float4x4, viewProj, None);
@@ -13,6 +13,7 @@ STRUCT(FrameUniforms)
     DATA(float4, unitBounds, None);    // x = bounding sphere centre height, y = radius (model units),
                                        // z, w = camera distance in radii where LOD1 and LOD2 start
     DATA(float4, cameraPos, None);     // xyz
+    DATA(float4, teamColors[2], None); // rgb per Team
     DATA(uint, unitCount, None);       // units in gUnitInstances
     DATA(uint, unitCapacity, None);    // length of each LOD's visible list
     DATA(uint, debugFlags, None);      // DEBUG_* bits
@@ -21,12 +22,17 @@ STRUCT(FrameUniforms)
     DATA(uint4, lodIndexCount, None);
 };
 
+// Scalar members only so Vulkan's std430 stride is 24 bytes, like UnitInstance.h.
 STRUCT(UnitInstance)
 {
-    DATA(float4x4, world, None);
-    DATA(float4, color, None);
-    DATA(float4, anim, None); // x = first matrix of this unit's frame in gBonePalettes
+    DATA(float, x, None);
+    DATA(float, z, None);
+    DATA(float, yaw, None);
+    DATA(float, scale, None);
+    DATA(uint, tintFlash, None); // bits 0-7 team, 8-15 hit flash unorm8
+    DATA(uint, pose, None);      // bits 0-23 first pose matrix, 24-31 blend unorm8
 };
+#define UNIT_POSE_OFFSET_MASK 0xffffffu // must match UNIT_POSE_OFFSET_BITS in UnitInstance.h
 
 STRUCT(BillboardInstance)
 {

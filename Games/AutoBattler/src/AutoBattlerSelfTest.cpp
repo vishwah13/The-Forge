@@ -1,5 +1,6 @@
 #include "AutoBattlerSim.h"
 #include "UnitCulling.h"
+#include "UnitInstance.h"
 #include "UnitLod.h"
 
 #include <math.h>
@@ -352,6 +353,7 @@ static RenderData allocRenderData(uint32_t unitCapacity = MAX_UNITS)
     RenderData data = {};
     data.pUnits = (UnitInstance*)tf_malloc(sizeof(UnitInstance) * unitCapacity);
     data.pBillboards = (BillboardInstance*)tf_malloc(sizeof(BillboardInstance) * (unitCapacity + MAX_PROJECTILES));
+    data.pUnitAnims = (UnitAnim*)tf_malloc(sizeof(UnitAnim) * unitCapacity);
     return data;
 }
 
@@ -359,6 +361,7 @@ static void freeRenderData(RenderData* pData)
 {
     tf_free(pData->pUnits);
     tf_free(pData->pBillboards);
+    tf_free(pData->pUnitAnims);
 }
 
 static void testRenderDataPrep(TestContext* pCtx)
@@ -377,11 +380,11 @@ static void testRenderDataPrep(TestContext* pCtx)
     bool     noFlash = true;
     for (uint32_t i = 0; i < data.mUnitCount; ++i)
     {
-        const float4 t = v4ToF4(data.pUnits[i].mWorld[3]);
+        const float4 t(data.pUnits[i].mX, 0.0f, data.pUnits[i].mZ, 1.0f);
         onGround = onGround && t.y == 0.0f && t.x > 0.0f && t.x < ARENA_SIZE && t.z > 0.0f && t.z < ARENA_SIZE;
-        if (data.pUnits[i].mColor.z > data.pUnits[i].mColor.x)
+        if (unitTeam(data.pUnits[i]) == TEAM_PLAYER)
             ++blue;
-        noFlash = noFlash && data.pUnits[i].mColor.w == 0.0f;
+        noFlash = noFlash && unitFlash(data.pUnits[i]) == 0.0f;
     }
     CHECK(onGround);
     CHECK(noFlash);
@@ -391,9 +394,9 @@ static void testRenderDataPrep(TestContext* pCtx)
     bool scaled = true;
     for (uint32_t i = 0; i < data.mUnitCount; ++i)
     {
-        const float expected = UNIT_MODEL_SCALE * (data.pUnits[i].mColor.z > data.pUnits[i].mColor.x ? gUnitStats[UNIT_MELEE].mScale
-                                                                                                       : gUnitStats[UNIT_TANK].mScale);
-        scaled = scaled && fabsf((float)length(data.pUnits[i].mWorld[0].getXYZ()) - expected) < 1e-4f;
+        const float expected =
+            UNIT_MODEL_SCALE * (unitTeam(data.pUnits[i]) == TEAM_PLAYER ? gUnitStats[UNIT_MELEE].mScale : gUnitStats[UNIT_TANK].mScale);
+        scaled = scaled && fabsf(data.pUnits[i].mScale - expected) < 1e-4f;
     }
     CHECK(scaled);
     freeRenderData(&data);
@@ -422,13 +425,48 @@ static void testRenderDataBattle(TestContext* pCtx)
     simDestroy(s);
 }
 
+static void testUnitInstancePacking(TestContext* pCtx)
+{
+    CHECK(sizeof(UnitInstance) == 24u);
+
+    // World matrix rebuilt from the packed fields equals the one the sim used to send.
+    const float yaws[] = { 0.0f, 0.7f, -2.5f, PI };
+    bool        same = true;
+    for (uint32_t i = 0; i < TF_ARRAY_COUNT(yaws); ++i)
+    {
+        UnitInstance u = {};
+        u.mX = 12.5f;
+        u.mZ = -3.0f;
+        u.mYaw = yaws[i];
+        u.mScale = 1.3f;
+        const mat4 expected = mat4::translation(vec3(12.5f, 0.0f, -3.0f)) * mat4::rotationY(yaws[i]) * mat4::scale(vec3(1.3f));
+        const mat4 actual = unitWorldMatrix(u);
+        for (int c = 0; c < 4; ++c)
+            same = same && (float)length(actual[c] - expected[c]) < 1e-5f;
+    }
+    CHECK(same);
+
+    UnitInstance u = {};
+    u.mTintFlash = packTintFlash(TEAM_ENEMY, 1.0f);
+    CHECK(unitTeam(u) == TEAM_ENEMY && unitFlash(u) == 1.0f);
+    u.mTintFlash = packTintFlash(TEAM_PLAYER, 0.0f);
+    CHECK(unitTeam(u) == TEAM_PLAYER && unitFlash(u) == 0.0f);
+    u.mTintFlash = packTintFlash(TEAM_PLAYER, 0.5f);
+    CHECK(fabsf(unitFlash(u) - 0.5f) < 1.0f / 255.0f);
+
+    const uint32_t pose = packUnitPose((1u << 24) - 1u, 0.25f);
+    CHECK(unitPoseOffset(pose) == (1u << 24) - 1u);
+    CHECK(fabsf(unitPoseBlend(pose) - 0.25f) < 1.0f / 255.0f);
+    CHECK(unitPoseBlend(packUnitPose(7u, 0.0f)) == 0.0f && unitPoseOffset(packUnitPose(7u, 0.0f)) == 7u);
+}
+
 static uint32_t countClip(const RenderData& data, AnimClip clip, bool blueOnly)
 {
     uint32_t n = 0;
     for (uint32_t i = 0; i < data.mUnitCount; ++i)
     {
-        const bool blue = data.pUnits[i].mColor.z > data.pUnits[i].mColor.x;
-        if ((uint32_t)data.pUnits[i].mAnim.x == (uint32_t)clip && (!blueOnly || blue))
+        const bool blue = unitTeam(data.pUnits[i]) == TEAM_PLAYER;
+        if (data.pUnitAnims[i].mClip == clip && (!blueOnly || blue))
             ++n;
     }
     return n;
@@ -443,14 +481,14 @@ static void testAnimationState(TestContext* pCtx)
     // Prep: everyone idles, clocks run and are not in lockstep.
     simFillRenderData(s, &data);
     CHECK(countClip(data, ANIM_IDLE, false) == data.mUnitCount);
-    const float t0 = data.pUnits[0].mAnim.y;
+    const float t0 = data.pUnitAnims[0].mTime;
     bool        offsets = false;
     for (uint32_t i = 1; i < data.mUnitCount; ++i)
-        offsets = offsets || data.pUnits[i].mAnim.y != t0;
+        offsets = offsets || data.pUnitAnims[i].mTime != t0;
     CHECK(offsets);
     simStep(s, 0.5f / 15.0f);
     simFillRenderData(s, &data);
-    CHECK(data.pUnits[0].mAnim.y > t0);
+    CHECK(data.pUnitAnims[0].mTime > t0);
 
     // Battle: the armies start 10+ m apart, so units walk towards each other.
     CHECK(simStartBattle(s));
@@ -499,7 +537,7 @@ static bool allInsideWorld(const RenderData& data, float worldSize, float* pMaxX
     *pMaxX = 0.0f;
     for (uint32_t i = 0; i < data.mUnitCount; ++i)
     {
-        const float4 t = v4ToF4(data.pUnits[i].mWorld[3]);
+        const float4 t(data.pUnits[i].mX, 0.0f, data.pUnits[i].mZ, 1.0f);
         inside = inside && t.x > 0.0f && t.x < worldSize && t.z > 0.0f && t.z < worldSize;
         *pMaxX = t.x > *pMaxX ? t.x : *pMaxX;
     }
@@ -546,11 +584,8 @@ static void testStressSetup(TestContext* pCtx)
     simDestroy(s);
 }
 
-// A unit whose bounding sphere centre is at (x, y, z) in world space.
-static mat4 unitAt(float x, float y, float z, float scale)
-{
-    return mat4::translation(vec3(x, y - UNIT_BOUND_CENTER_Y * scale, z)) * mat4::scale(vec3(scale));
-}
+// Feet of a unit whose bounding sphere centre is at (x, y, z) in world space.
+static float3 unitAt(float x, float y, float z, float scale) { return float3(x, y - UNIT_BOUND_CENTER_Y * scale, z); }
 
 static void testUnitCulling(TestContext* pCtx)
 {
@@ -572,20 +607,20 @@ static void testUnitCulling(TestContext* pCtx)
     const float c30 = cosf(PI / 6.0f);        // a sphere at edge + o is o * c30 from the side plane
     CHECK(r > 1.0f * c30 && r < 2.0f * c30);  // so +1 m straddles the edge and +2 m is fully outside
 
-    CHECK(unitInFrustum(planes, unitAt(0.0f, 0.0f, 0.0f, s)));
-    CHECK(unitInFrustum(planes, unitAt(edgeX + 1.0f, 0.0f, 0.0f, s)));   // straddles the right edge
-    CHECK(!unitInFrustum(planes, unitAt(edgeX + 2.0f, 0.0f, 0.0f, s)));  // right of it
-    CHECK(unitInFrustum(planes, unitAt(-edgeX - 1.0f, 0.0f, 0.0f, s)));  // straddles the left edge
-    CHECK(!unitInFrustum(planes, unitAt(-edgeX - 2.0f, 0.0f, 0.0f, s))); // left of it
-    CHECK(!unitInFrustum(planes, unitAt(0.0f, edgeY + 2.0f / cosf(atanf(tanHalfX * aspectInverse)), 0.0f, s))); // above
-    CHECK(!unitInFrustum(planes, unitAt(0.0f, -edgeY - 2.0f / cosf(atanf(tanHalfX * aspectInverse)), 0.0f, s))); // below
-    CHECK(!unitInFrustum(planes, unitAt(0.0f, 0.0f, -60.0f, s)));                       // behind the camera
-    CHECK(unitInFrustum(planes, unitAt(0.0f, 0.0f, -50.0f + zNear - 1.0f, s)));          // straddles the near plane
+    CHECK(unitInFrustum(planes, unitAt(0.0f, 0.0f, 0.0f, s), s));
+    CHECK(unitInFrustum(planes, unitAt(edgeX + 1.0f, 0.0f, 0.0f, s), s));   // straddles the right edge
+    CHECK(!unitInFrustum(planes, unitAt(edgeX + 2.0f, 0.0f, 0.0f, s), s));  // right of it
+    CHECK(unitInFrustum(planes, unitAt(-edgeX - 1.0f, 0.0f, 0.0f, s), s));  // straddles the left edge
+    CHECK(!unitInFrustum(planes, unitAt(-edgeX - 2.0f, 0.0f, 0.0f, s), s)); // left of it
+    CHECK(!unitInFrustum(planes, unitAt(0.0f, edgeY + 2.0f / cosf(atanf(tanHalfX * aspectInverse)), 0.0f, s), s)); // above
+    CHECK(!unitInFrustum(planes, unitAt(0.0f, -edgeY - 2.0f / cosf(atanf(tanHalfX * aspectInverse)), 0.0f, s), s)); // below
+    CHECK(!unitInFrustum(planes, unitAt(0.0f, 0.0f, -60.0f, s), s));                       // behind the camera
+    CHECK(unitInFrustum(planes, unitAt(0.0f, 0.0f, -50.0f + zNear - 1.0f, s), s));          // straddles the near plane
     // The reverse-Z matrix stores depth as 1 - f/(f-n) in floats, which places the far plane up to ~1 m
     // off at 2 km (the GPU clips with the same matrix), so these two use wider margins.
-    CHECK(unitInFrustum(planes, unitAt(0.0f, 0.0f, -50.0f + zFar + 0.3f, s)));           // straddles the far plane
-    CHECK(!unitInFrustum(planes, unitAt(0.0f, 0.0f, -50.0f + zFar + 3.0f, s)));          // beyond it
-    CHECK(unitInFrustum(planes, unitAt(edgeX + 2.0f, 0.0f, 0.0f, 2.0f * s)));          // a bigger unit still reaches in
+    CHECK(unitInFrustum(planes, unitAt(0.0f, 0.0f, -50.0f + zFar + 0.3f, s), s));           // straddles the far plane
+    CHECK(!unitInFrustum(planes, unitAt(0.0f, 0.0f, -50.0f + zFar + 3.0f, s), s));          // beyond it
+    CHECK(unitInFrustum(planes, unitAt(edgeX + 2.0f, 0.0f, 0.0f, 2.0f * s), 2.0f * s));          // a bigger unit still reaches in
 }
 
 static void testUnitLodSelection(TestContext* pCtx)
@@ -599,15 +634,15 @@ static void testUnitLodSelection(TestContext* pCtx)
 
     const float s = 0.5f;
     const float r = UNIT_BOUND_RADIUS * s;
-    CHECK(unitLod(planes, eye, unitAt(0.0f, 0.0f, eye.z + 10.0f * r, s)) == 0);
-    CHECK(unitLod(planes, eye, unitAt(0.0f, 0.0f, eye.z + (UNIT_LOD_DISTANCES[0] - 1.0f) * r, s)) == 0);
-    CHECK(unitLod(planes, eye, unitAt(0.0f, 0.0f, eye.z + (UNIT_LOD_DISTANCES[0] + 1.0f) * r, s)) == 1);
-    CHECK(unitLod(planes, eye, unitAt(0.0f, 0.0f, eye.z + (UNIT_LOD_DISTANCES[1] - 1.0f) * r, s)) == 1);
-    CHECK(unitLod(planes, eye, unitAt(0.0f, 0.0f, eye.z + (UNIT_LOD_DISTANCES[1] + 1.0f) * r, s)) == 2);
-    CHECK(unitLod(planes, eye, unitAt(0.0f, 0.0f, eye.z + 1000.0f, s)) == 2);
-    CHECK(unitLod(planes, eye, unitAt(0.0f, 0.0f, eye.z - 10.0f, s)) == -1); // behind the camera
+    CHECK(unitLod(planes, eye, unitAt(0.0f, 0.0f, eye.z + 10.0f * r, s), s) == 0);
+    CHECK(unitLod(planes, eye, unitAt(0.0f, 0.0f, eye.z + (UNIT_LOD_DISTANCES[0] - 1.0f) * r, s), s) == 0);
+    CHECK(unitLod(planes, eye, unitAt(0.0f, 0.0f, eye.z + (UNIT_LOD_DISTANCES[0] + 1.0f) * r, s), s) == 1);
+    CHECK(unitLod(planes, eye, unitAt(0.0f, 0.0f, eye.z + (UNIT_LOD_DISTANCES[1] - 1.0f) * r, s), s) == 1);
+    CHECK(unitLod(planes, eye, unitAt(0.0f, 0.0f, eye.z + (UNIT_LOD_DISTANCES[1] + 1.0f) * r, s), s) == 2);
+    CHECK(unitLod(planes, eye, unitAt(0.0f, 0.0f, eye.z + 1000.0f, s), s) == 2);
+    CHECK(unitLod(planes, eye, unitAt(0.0f, 0.0f, eye.z - 10.0f, s), s) == -1); // behind the camera
     // Distances are in bounding radii, so a bigger unit keeps detail further out.
-    CHECK(unitLod(planes, eye, unitAt(0.0f, 0.0f, eye.z + (UNIT_LOD_DISTANCES[0] + 1.0f) * r, 2.0f * s)) == 0);
+    CHECK(unitLod(planes, eye, unitAt(0.0f, 0.0f, eye.z + (UNIT_LOD_DISTANCES[0] + 1.0f) * r, 2.0f * s), 2.0f * s) == 0);
 }
 
 // UV sphere with a duplicated seam column, like a textured mesh.
@@ -741,6 +776,7 @@ int runAutoBattlerSelfTest(const char* pResultFileName)
         { "thread count does not change outcome", testThreadCountDoesNotChangeOutcome },
         { "render data in prep", testRenderDataPrep },
         { "render data in battle", testRenderDataBattle },
+        { "unit instance packing", testUnitInstancePacking },
         { "animation state", testAnimationState },
         { "stress setup", testStressSetup },
         { "unit culling", testUnitCulling },

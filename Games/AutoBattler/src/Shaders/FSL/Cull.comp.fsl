@@ -11,9 +11,9 @@ void CS_MAIN(SV_DispatchThreadID(uint3) threadId)
     uint unit = threadId.x;
     if (unit < gFrame.unitCount)
     {
-        float4x4 world = gUnitInstances[unit].world;
-        float3   center = mul(world, float4(0.0f, gFrame.unitBounds.x, 0.0f, 1.0f)).xyz;
-        float    radius = gFrame.unitBounds.y * length(mul(world, float4(1.0f, 0.0f, 0.0f, 0.0f)).xyz);
+        UnitInstance inst = gUnitInstances[unit];
+        float3       center = float3(inst.x, gFrame.unitBounds.x * inst.scale, inst.z);
+        float        radius = gFrame.unitBounds.y * inst.scale;
         bool     visible = true;
         for (uint i = 0; i < 6; ++i)
             visible = visible && dot(gFrame.cullPlanes[i].xyz, center) + gFrame.cullPlanes[i].w >= -radius;

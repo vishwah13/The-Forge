@@ -69,14 +69,16 @@ enum AnimClip : uint8_t
     ANIM_CLIP_COUNT
 };
 
-// GPU instance layouts. Must match UnitInstance/BillboardInstance in Shaders/FSL/AutoBattler.h.fsl.
-struct UnitInstance
+struct UnitInstance; // UnitInstance.h
+
+// Clip and time a unit is playing; the app turns it into UnitInstance::mPose. CPU only.
+struct UnitAnim
 {
-    mat4   mWorld;
-    float4 mColor; // rgb team colour, a = hit flash [0,1]
-    float4 mAnim;  // sim writes x = AnimClip, y = clip time (s); the app replaces x with the palette offset
+    AnimClip mClip;
+    float    mTime; // seconds
 };
 
+// GPU instance layout. Must match BillboardInstance in Shaders/FSL/AutoBattler.h.fsl.
 struct BillboardInstance
 {
     float4 mCenterHalfWidth;      // xyz world centre, w half width
@@ -88,6 +90,7 @@ struct RenderData
 {
     UnitInstance*      pUnits;      // capacity MAX_UNITS
     BillboardInstance* pBillboards; // capacity MAX_BILLBOARDS
+    UnitAnim*          pUnitAnims;  // capacity MAX_UNITS, parallel to pUnits
     uint32_t           mUnitCount;
     uint32_t           mBillboardCount;
 };
@@ -128,7 +131,7 @@ const char* simGetMessage(const BattleSim* pSim);
 uint32_t    simGetUnitCapacity(const BattleSim* pSim);
 float       simGetWorldSize(const BattleSim* pSim); // ARENA_SIZE except during stress runs
 
-// Writes one UnitInstance per unit, a health bar per damaged unit and a billboard per projectile.
+// Writes one UnitInstance and UnitAnim per unit, a health bar per damaged unit and a billboard per projectile.
 // pOut needs room for simGetUnitCapacity() units and simGetUnitCapacity() + MAX_PROJECTILES billboards.
 void simFillRenderData(BattleSim* pSim, RenderData* pOut);
 

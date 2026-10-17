@@ -1,4 +1,5 @@
 #include "AutoBattlerSim.h"
+#include "UnitInstance.h"
 
 #include <float.h>
 #include <math.h>
@@ -946,7 +947,6 @@ float simGetWorldSize(const BattleSim* p) { return p->mWorldSize; }
 //--------------------------------------------------------------------------------------------
 // Render data
 //--------------------------------------------------------------------------------------------
-static const float3 TEAM_COLORS[TEAM_COUNT] = { float3(0.30f, 0.55f, 1.00f), float3(1.00f, 0.30f, 0.25f) };
 static const float  HEALTH_BAR_HEIGHT = 2.0f; // model units, above the 1.73-unit-tall bind pose
 
 void simFillRenderData(BattleSim* p, RenderData* pOut)
@@ -964,14 +964,19 @@ void simFillRenderData(BattleSim* p, RenderData* pOut)
         {
             ASSERT(pOut->mUnitCount < p->mUnitCapacity);
             const float   scale = gUnitStats[unit[i].type].mScale * UNIT_MODEL_SCALE;
-            const float3& color = TEAM_COLORS[unit[i].team];
-            UnitInstance& instance = pOut->pUnits[pOut->mUnitCount++];
-            instance.mWorld = mat4::translation(vec3(pos[i].x, 0.0f, pos[i].z)) * mat4::rotationY(unit[i].yaw) * mat4::scale(vec3(scale));
-            instance.mColor = float4(color.x, color.y, color.z, health[i].hitFlash > 0.0f ? health[i].hitFlash : 0.0f);
+            UnitInstance& instance = pOut->pUnits[pOut->mUnitCount];
+            instance.mX = pos[i].x;
+            instance.mZ = pos[i].z;
+            instance.mYaw = unit[i].yaw;
+            instance.mScale = scale;
+            instance.mTintFlash = packTintFlash(unit[i].team, health[i].hitFlash);
+            instance.mPose = 0; // the app fills it from pUnitAnims
             const bool winner = (p->mPhase == PHASE_VICTORY && unit[i].team == TEAM_PLAYER) ||
                                 (p->mPhase == PHASE_DEFEAT && unit[i].team == TEAM_ENEMY);
-            const AnimClip clip = winner ? ANIM_DANCE : (unit[i].moving ? ANIM_WALK : (unit[i].attacking ? ANIM_ATTACK : ANIM_IDLE));
-            instance.mAnim = float4((float)clip, unit[i].animTime, 0.0f, 0.0f);
+            UnitAnim& anim = pOut->pUnitAnims[pOut->mUnitCount];
+            anim.mClip = winner ? ANIM_DANCE : (unit[i].moving ? ANIM_WALK : (unit[i].attacking ? ANIM_ATTACK : ANIM_IDLE));
+            anim.mTime = unit[i].animTime;
+            ++pOut->mUnitCount;
 
             if (health[i].hp < health[i].maxHp)
             {

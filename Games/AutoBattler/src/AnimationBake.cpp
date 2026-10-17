@@ -107,9 +107,9 @@ void freeBakedAnimations(BakedAnimations* pBaked)
     pBaked->pPalettes = NULL;
 }
 
-uint32_t bakedPaletteOffset(const BakedAnimations& baked, AnimClip clip, float time)
+BakedPose bakedPose(const BakedAnimations& baked, AnimClip clip, float time)
 {
     const BakedClip& c = baked.mClips[clip];
     const uint32_t   frame = time > 0.0f ? (uint32_t)(time * BAKE_FPS) % c.mFrameCount : 0u;
-    return (c.mFirstFrame + frame) * baked.mJointCount;
+    return { (c.mFirstFrame + frame) * baked.mJointCount, 0.0f };
 }

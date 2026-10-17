@@ -28,19 +28,24 @@ VSOutput VS_MAIN(VSInput In, SV_InstanceID(uint) instanceId)
     // Instances are the units that passed culling; each samples its own frame of the baked animation table.
     uint     entry = gVisibleUnits[instanceId];
     uint     unit = entry & ((1u << VISIBLE_LOD_SHIFT) - 1u);
-    uint     palette = uint(gUnitInstances[unit].anim.x);
-    float4x4 boneTransform = gBonePalettes[palette + In.BoneIndices[0]] * In.BoneWeights[0];
+    UnitInstance inst = gUnitInstances[unit];
+    uint         palette = inst.pose & UNIT_POSE_OFFSET_MASK;
+    float4x4     boneTransform = gBonePalettes[palette + In.BoneIndices[0]] * In.BoneWeights[0];
     boneTransform += gBonePalettes[palette + In.BoneIndices[1]] * In.BoneWeights[1];
     boneTransform += gBonePalettes[palette + In.BoneIndices[2]] * In.BoneWeights[2];
     boneTransform += gBonePalettes[palette + In.BoneIndices[3]] * In.BoneWeights[3];
 
-    float4x4 world = gUnitInstances[unit].world;
-    float4   worldPos = mul(world, mul(boneTransform, float4(In.Position, 1.0f)));
-    Out.Position = mul(gFrame.viewProj, worldPos);
-    float3 normal = decodeDir(unpackUnorm2x16(In.Normal));
-    Out.Normal = normalize(mul(world, mul(boneTransform, float4(normal, 0.0f))).xyz);
+    // World = translation(x, 0, z) * rotationY(yaw) * scale, as unitWorldMatrix() in UnitInstance.h.
+    float  c = cos(inst.yaw);
+    float  s = sin(inst.yaw);
+    float3 model = mul(boneTransform, float4(In.Position, 1.0f)).xyz;
+    float3 worldPos = float3(inst.x + inst.scale * (c * model.x + s * model.z), inst.scale * model.y,
+                             inst.z + inst.scale * (c * model.z - s * model.x));
+    Out.Position = mul(gFrame.viewProj, float4(worldPos, 1.0f));
+    float3 normal = mul(boneTransform, float4(decodeDir(unpackUnorm2x16(In.Normal)), 0.0f)).xyz;
+    Out.Normal = normalize(float3(c * normal.x + s * normal.z, normal.y, c * normal.z - s * normal.x));
     Out.UV = unpack2Floats(In.UV);
-    Out.Color = gUnitInstances[unit].color;
+    Out.Color = float4(gFrame.teamColors[inst.tintFlash & 0xffu].rgb, float((inst.tintFlash >> 8) & 0xffu) / 255.0f);
     if ((gFrame.debugFlags & DEBUG_LOD_COLORS) != 0)
     {
         uint lod = entry >> VISIBLE_LOD_SHIFT;

@@ -2,6 +2,7 @@
 // rendering, camera, input and UI.
 
 #include "AnimationBake.h"
+#include "UnitInstance.h"
 #include "AutoBattlerSim.h"
 #include "UnitCulling.h"
 #include "UnitLod.h"
@@ -105,6 +106,7 @@ struct FrameUniforms
     float4   mCullPlanes[6];
     float4   mUnitBounds; // x = bounding sphere centre height, y = radius (model units), z, w = LOD distances in radii
     float4   mCameraPos;
+    float4   mTeamColors[TEAM_COUNT]; // rgb
     uint32_t mUnitCount;
     uint32_t mUnitCapacity;
     uint32_t mDebugFlags; // DEBUG_* bits
@@ -121,6 +123,8 @@ static const char* UNIT_TEXTURE = "paladin_D.tex";
 // One clip per AnimClip. Walking falls back to idle until a walking.ozz has been imported.
 static const char* UNIT_CLIPS[ANIM_CLIP_COUNT] = { "paladin/animations/neutral_idle.ozz", "paladin/animations/walking.ozz",
                                                    "paladin/animations/shooting.ozz", "paladin/animations/silly_dancing.ozz" };
+
+static const float3 TEAM_COLORS[TEAM_COUNT] = { float3(0.30f, 0.55f, 1.00f), float3(1.00f, 0.30f, 0.25f) };
 
 Rig             gRig; // unit model skeleton
 BakedAnimations gBaked = {};
@@ -374,6 +378,7 @@ ab_zoom; buttonanalog; MOUSE_WHEEL_DOWN; 1.0f; MOUSE_WHEEL_UP; -1.0f)");
 
         gRenderData.pUnits = (UnitInstance*)tf_malloc(sizeof(UnitInstance) * unitCapacity);
         gRenderData.pBillboards = (BillboardInstance*)tf_malloc(sizeof(BillboardInstance) * billboardCapacity);
+        gRenderData.pUnitAnims = (UnitAnim*)tf_malloc(sizeof(UnitAnim) * unitCapacity);
 
         const uint32_t cores = getNumCPUCores();
         pSim = simCreate(cores > 1 ? cores - 1 : 1, unitCapacity);
@@ -418,6 +423,7 @@ ab_zoom; buttonanalog; MOUSE_WHEEL_DOWN; 1.0f; MOUSE_WHEEL_UP; -1.0f)");
         pSim = NULL;
         tf_free(gRenderData.pUnits);
         tf_free(gRenderData.pBillboards);
+        tf_free(gRenderData.pUnitAnims);
 
         gRig.Exit();
 
@@ -553,11 +559,11 @@ ab_zoom; buttonanalog; MOUSE_WHEEL_DOWN; 1.0f; MOUSE_WHEEL_UP; -1.0f)");
         updatePicking();
         simFillRenderData(pSim, &gRenderData);
         updateCullUniforms();
-        // The sim says which clip and time each unit plays; turn that into its palette offset.
+        // The sim says which clip and time each unit plays; turn that into its pose in the baked table.
         for (uint32_t i = 0; i < gRenderData.mUnitCount; ++i)
         {
-            float4& anim = gRenderData.pUnits[i].mAnim;
-            anim.x = (float)bakedPaletteOffset(gBaked, (AnimClip)(uint32_t)anim.x, anim.y);
+            const BakedPose pose = bakedPose(gBaked, gRenderData.pUnitAnims[i].mClip, gRenderData.pUnitAnims[i].mTime);
+            gRenderData.pUnits[i].mPose = packUnitPose(pose.mOffset, pose.mBlend);
         }
         updateHud();
     }
@@ -778,6 +784,8 @@ ab_zoom; buttonanalog; MOUSE_WHEEL_DOWN; 1.0f; MOUSE_WHEEL_UP; -1.0f)");
         frustumPlanesFromViewProj(gFrameUniforms.mViewProj, gFrameUniforms.mCullPlanes);
         gFrameUniforms.mUnitBounds = float4(UNIT_BOUND_CENTER_Y, UNIT_BOUND_RADIUS, UNIT_LOD_DISTANCES[0], UNIT_LOD_DISTANCES[1]);
         gFrameUniforms.mCameraPos = float4(v3ToF3(gCameraEye), 1.0f);
+        for (uint32_t t = 0; t < TEAM_COUNT; ++t)
+            gFrameUniforms.mTeamColors[t] = float4(TEAM_COLORS[t], 1.0f);
         gFrameUniforms.mUnitCount = gRenderData.mUnitCount;
         gFrameUniforms.mUnitCapacity = gUnitCapacity;
         gFrameUniforms.mDebugFlags = gShowLodColors ? DEBUG_LOD_COLORS : 0u;
@@ -795,7 +803,8 @@ ab_zoom; buttonanalog; MOUSE_WHEEL_DOWN; 1.0f; MOUSE_WHEEL_UP; -1.0f)");
         const float3 eye = gFrameUniforms.mCameraPos.getXYZ();
         for (uint32_t i = 0; i < gRenderData.mUnitCount; ++i)
         {
-            const int32_t lod = unitLod(gFrameUniforms.mCullPlanes, eye, gRenderData.pUnits[i].mWorld);
+            const UnitInstance& u = gRenderData.pUnits[i];
+            const int32_t       lod = unitLod(gFrameUniforms.mCullPlanes, eye, float3(u.mX, 0.0f, u.mZ), u.mScale);
             if (lod >= 0)
                 ++lodUnits[lod];
         }
